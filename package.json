@@ -1,0 +1,13 @@
+{
+  "name": "onde92",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Onde 92 — horaires et suivi en temps réel des bus 144, 160, 244 et 360 (Hauts-de-Seine)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "gtfs": "node --max-old-space-size=144 scripts/gtfs-build.js data"
+  },
+  "engines": { "node": ">=18" },
+  "license": "UNLICENSED"
+}

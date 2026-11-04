@@ -1,0 +1,57 @@
+{
+ "generated": "2026-11-04T17:22:01",
+ "lines": [
+  {
+   "short": "144",
+   "color": "#D282BE",
+   "textColor": "#000000",
+   "lineRef": "STIF:Line::C01169:",
+   "agency": "La Défense - Saint Cloud",
+   "termini": [
+    "La Défense",
+    "Rueil-Malmaison RER"
+   ],
+   "nStops": 42,
+   "nTrips": 723
+  },
+  {
+   "short": "160",
+   "color": "#00643C",
+   "textColor": "#FFFFFF",
+   "lineRef": "STIF:Line::C01183:",
+   "agency": "La Défense - Saint Cloud",
+   "termini": [
+    "Boulogne Pont de Saint-Cloud",
+    "Nanterre-Préfecture RER"
+   ],
+   "nStops": 40,
+   "nTrips": 473
+  },
+  {
+   "short": "244",
+   "color": "#A0006E",
+   "textColor": "#FFFFFF",
+   "lineRef": "STIF:Line::C01240:",
+   "agency": "La Défense - Saint Cloud",
+   "termini": [
+    "Porte Maillot",
+    "Gare de Rueil-Malmaison RER"
+   ],
+   "nStops": 32,
+   "nTrips": 437
+  },
+  {
+   "short": "360",
+   "color": "#D2D200",
+   "textColor": "#000000",
+   "lineRef": "STIF:Line::C01304:",
+   "agency": "La Défense - Saint Cloud",
+   "termini": [
+    "La Défense",
+    "Hôpital de Garches"
+   ],
+   "nStops": 35,
+   "nTrips": 271
+  }
+ ]
+}

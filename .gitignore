@@ -1,0 +1,10 @@
+.env
+.env.*
+logs/
+node_modules/
+screenshots/
+bin/
+server.log
+PUBLIC_URL.txt
+*.zip
+.DS_Store
