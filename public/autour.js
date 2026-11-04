@@ -408,7 +408,7 @@ async function viewAutour(params) {
     }
     if (st.plan.walkDirect) jobs.push(walkRoute(O, { lat: D.lat, lon: D.lon }).then(w => { if (st.plan) st.plan.walkDirect = w; }));
     await Promise.all(jobs); if (st.planKey !== key || !st.plan) return;
-    st.plan.loading = false; reorder(); refresh(true); fitOpt();
+    st.plan.loading = false; reorder(); st.opt = 0; refresh(true); fitOpt();
     st.plan.opts.forEach(op => pollRT(op.short));
   }
   function evalOpt(op, now) {
