@@ -8,3 +8,4 @@ server.log
 PUBLIC_URL.txt
 *.zip
 .DS_Store
+.push_token

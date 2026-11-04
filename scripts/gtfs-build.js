@@ -210,7 +210,7 @@ async function build(zipFile, OUT) {
 }
 
 async function main() {
-  const OUT = path.resolve(process.argv[2] || path.join(__dirname, '..', 'data'));
+  const OUT = path.resolve(process.argv[2] || path.join(__dirname, '..', 'public', 'data'));
   let zipFile = process.argv[3], tmpZip = null;
   const t0 = Date.now();
   if (!zipFile) { tmpZip = zipFile = path.join(os.tmpdir(), `idfm-gtfs-${process.pid}.zip`); log('téléchargement', URL_GTFS); await download(URL_GTFS, zipFile); log('zip', (fs.statSync(zipFile).size / 1e6).toFixed(1), 'Mo'); }

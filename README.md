@@ -11,7 +11,7 @@ Variables : `PORT` (8092), `PRIM_API_KEY`, `PRIM_DAILY_BUDGET` (900 ; 1400 si qu
 Aucune dépendance npm. La clé ne quitte jamais le serveur.
 
 ## Données
-- `scripts/update-gtfs.sh` : télécharge le GTFS IDFM (~115 Mo) et régénère `data/line-XXX.json` (arrêts + coordonnées, tracés simplifiés, distances le long du tracé, toutes les courses avec leurs heures à chaque arrêt, calendrier par date). Le GTFS ne couvre que ~30 jours : relancer au moins chaque semaine (cron).
+- `scripts/update-gtfs.sh` : télécharge le GTFS IDFM (~115 Mo) et régénère `public/data/line-XXX.json` (arrêts + coordonnées, tracés simplifiés, distances le long du tracé, toutes les courses avec leurs heures à chaque arrêt, calendrier par date). Le GTFS ne couvre que ~30 jours : relancer au moins chaque semaine (cron).
 - Temps réel : PRIM « Prochains passages — requête ligne » (`/marketplace/estimated-timetable?LineRef=STIF:Line::C01169:`), 1 appel par ligne, cache ≥ 60 s et lissage automatique sur le quota journalier.
 
 ## « Est-ce que j'ai mon bus ? » (`#/monbus`)
@@ -23,15 +23,18 @@ Point de départ (géolocalisation ou adresse via api-adresse.data.gouv.fr, mém
 - `GET /api/geocode?q=…` / `?lat=&lon=` — proxy BAN (cache 6 h).
 - `GET /api/walk?from=lat,lon&to=lat,lon` — itinéraire piéton OSRM (distance, durée, tracé).
 
-## Déploiement Render.com (plan gratuit)
-- `render.yaml` (Blueprint) : service web Node, `npm start`, health check `/api/status`, `PRIM_API_KEY` en `sync: false` (à saisir dans le tableau de bord, jamais dans git).
-- Le serveur écoute `process.env.PORT`. Aucune dépendance npm. Les données `data/*.json` sont versionnées : le site marche dès le premier démarrage.
-- Pas de cron sur Render : avec `GTFS_AUTO_REFRESH=1` (ou automatiquement si `RENDER` est défini), le serveur vérifie toutes les heures (et 20 s après le démarrage) si les données ont plus de 6 jours (`GTFS_REFRESH_DAYS`) ou si le calendrier couvre moins de 14 jours ; si oui il lance `scripts/gtfs-build.js` dans un processus séparé (Node pur, zip lu en flux, tas plafonné ~144 Mo, pic ≈ 210 Mo RSS, ~10 s). Résultat écrit atomiquement dans `$TMPDIR/onde92-data` (`GTFS_LIVE_DIR`) puis servi ; en cas d'échec, on garde les fichiers versionnés (nouvel essai 6 h plus tard).
-- Disque éphémère et mise en veille après 15 min d'inactivité sur le plan gratuit : après un réveil, l'app repart des données versionnées puis se reconstruit si elles sont trop vieilles. Pour figer des données fraîches dans git : `npm run gtfs` puis commit/push.
+## Déploiement Vercel (Hobby, gratuit)
+- Statique : `public/` (dont `public/data/*.json`, les horaires GTFS versionnés). Pas d'étape de build, pas de dépendance npm (`vercel.json` : `outputDirectory: public`, `installCommand: ""`, fonctions en région `cdg1`).
+- Fonctions (`api/`, Node 22, CommonJS) : `api/status.js`, `api/rt/[line].js` (proxy PRIM), `api/geocode.js`, `api/walk.js`. Logique partagée avec `server.js` dans `lib/core.js`.
+- Variable d'environnement : `PRIM_API_KEY` (Production + Preview). Optionnel : `RT_TTL_PEAK` (270), `RT_TTL_OFFPEAK` (900).
+- Quota PRIM (1000 req/jour par défaut) en serverless, sans état partagé :
+  - chaque réponse `/api/rt/:ligne` porte `Cache-Control: public, max-age=0, s-maxage=<reste>, stale-while-revalidate=60, stale-if-error=600` : le CDN Vercel ne rappelle la fonction qu'une fois par fenêtre et par ligne ;
+  - fenêtre de 270 s de 06:30 à 20:30 (Paris), 900 s sinon ; aucune requête PRIM quand aucune course n'est prévue (±30 min) ;
+  - cache mémoire identique dans l'instance chaude (s-maxage = temps restant, donc tous les caches expirent ensemble) ;
+  - pire cas calculé sur les horaires réels : ~850 appels/jour (4 lignes en continu), affiché dans `/api/status` (`rtCache.worstCasePrimCallsToday`).
+  - Limites : le cache CDN est régional (visiteurs hors Europe = autre cache) et chaque instance froide a son propre cache mémoire ; pour un usage local (Île-de-France) cela reste ≈ 1 région / 1 instance.
+- Données : GitHub Actions `.github/workflows/update-gtfs.yml` (lundi 05:00 UTC + manuel) reconstruit `public/data` avec `scripts/gtfs-build.js` et committe si ça a changé → Vercel redéploie.
+- Test local sans CLI Vercel : `node scripts/vercel-local.js` (sert `public/` + route `/api/*` vers les fonctions).
 
-## Mise en ligne / exploitation (box)
-- `scripts/start.sh` lance (une seule fois) `scripts/supervise.sh` : boucle de relance pour `node server.js` (charge `.env`) et pour `bin/cloudflared tunnel --protocol http2 --url http://localhost:8092`. Logs : `logs/server.log`, `logs/tunnel.log`.
-- L'URL `https://*.trycloudflare.com` est écrite dans `PUBLIC_URL.txt` seulement quand le tunnel est réellement connecté.
-- crontab : mise à jour GTFS le lundi 05:00 UTC (`logs/update-gtfs.log`), `start.sh` toutes les 5 min et au démarrage (garde-fou).
-- Temps réel PRIM : le flux « estimated-timetable » de ce réseau regroupe les prévisions par rang de passage et non par bus ; l'app traite chaque prévision par arrêt, en déduit la position des bus via les temps de parcours théoriques, puis les rattache aux courses GTFS (retard).
-- Fonds de carte : Stadia sur localhost, Esri Canvas (sans clé) sur tout autre domaine.
+## Hébergement Node classique (optionnel)
+- `npm start` = `node server.js` (écoute `PORT`). Sur un hôte sans cron, `GTFS_AUTO_REFRESH=1` reconstruit le GTFS au runtime (processus séparé, ~210 Mo RSS, résultat dans `$TMPDIR/onde92-data`, repli sur `public/data`).

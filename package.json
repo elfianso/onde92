@@ -6,8 +6,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "gtfs": "node --max-old-space-size=144 scripts/gtfs-build.js data"
+    "gtfs": "node --max-old-space-size=144 scripts/gtfs-build.js public/data"
   },
-  "engines": { "node": ">=18" },
+  "engines": { "node": "22.x" },
   "license": "UNLICENSED"
 }
