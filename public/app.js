@@ -88,7 +88,7 @@ function theoJourneys(L, now) {
     for (const t of L.tripObjs) {
       if (!svcs.has(t.svc)) continue;
       const end = mid + t.times[t.times.length - 1] * 1000; if (end < now - 60e3 || mid + t.times[0] * 1000 > now + 26 * 3600e3) continue;
-      out.push({ id: 'T' + t.tid + day, p: t.p, tms: t.times.map(x => mid + x * 1000), rt: false, trip: t, headsign: t.p.headsign, delay: 0 });
+      out.push({ id: 'T' + t.tid + day, p: t.p, tms: t.times.map(x => mid + x * 1000), rt: false, trip: t, day, headsign: t.p.headsign, delay: 0 });
     }
   }
   return out;
@@ -160,11 +160,11 @@ function rtJourneys(L, rt) {
       const f = b.pts[0];
       for (const day of days) { const mid = midnight(day), svcs = L.activeSvc(day);
         for (const t of L.tripObjs) { if (t.p.dir !== dir || !svcs.has(t.svc)) continue; const k = t.p.stopIndex.get(P.stops[f.k]); if (k == null) continue;
-          const d = f.e - (mid + t.times[k] * 1000); if (d < -5 * 60e3 || d > 25 * 60e3) continue; opts.push({ bi, t, mid, d, cost: d >= 0 ? d : -2.5 * d }); } }
+          const d = f.e - (mid + t.times[k] * 1000); if (d < -5 * 60e3 || d > 25 * 60e3) continue; opts.push({ bi, t, mid, day, d, cost: d >= 0 ? d : -2.5 * d }); } }
     });
     opts.sort((a, b) => a.cost - b.cost); const usedB = new Set(), usedT = new Set();
     for (const o of opts) { const key = o.t.tid + o.mid; if (usedB.has(o.bi) || usedT.has(key)) continue; usedB.add(o.bi); usedT.add(key);
-      const v = buses[o.bi].v; v.trip = o.t; v.delay = o.d; v.headsign = o.t.p.headsign;
+      const v = buses[o.bi].v; v.trip = o.t; v.day = o.day; v.delay = o.d; v.headsign = o.t.p.headsign;
       v.aimed = P.stops.map((sid, k) => { const j = o.t.p.stopIndex.get(sid); return j != null ? o.mid + o.t.times[j] * 1000 : v.tms[k] - o.d; }); }
     total += buses.length; matched += usedB.size;
     out.push(...buses.map(b => b.v));
@@ -186,6 +186,8 @@ function running(short, now = Date.now()) {
   return out;
 }
 // Prochains départs à un quai (temps réel en priorité, complété par le théorique).
+// Chaque départ porte la course GTFS rattachée (trip, k = rang de l'arrêt dans sa variante, day = journée de service)
+// et `fin` = dernier passage de la soirée à ce quai dans ce sens (voir isFin).
 function departures(short, stopId, now = Date.now(), n = 4) {
   const L = S.data[short]; const res = []; let rtMax = 0; const used = new Set();
   const raw = isLive(short) ? rtPredictions(L, S.rt[short]).get(stopId) : null;
@@ -196,17 +198,19 @@ function departures(short, stopId, now = Date.now(), n = 4) {
       // course théorique la plus proche pour ce passage (retard affiché, dédoublonnage)
       let bv = null, bd = Infinity; for (const v of js) { const k = v.p.stopIndex.get(stopId); if (k == null || !v.aimed) continue; const d = Math.abs(v.tms[k] - pr.e); if (d < bd && d < 120e3) { bd = d; bv = v; } }
       const k = bv ? bv.p.stopIndex.get(stopId) : null;
-      if (bv?.trip) used.add(bv.trip.tid);
+      if (bv?.trip) used.add(bv.trip.tid + bv.day);
       const pat = L.patterns.find(p => p.stops[p.stops.length - 1] === pr.dest);
-      res.push({ t: pr.e, rt: true, aim: bv ? bv.aimed[k] : null, delay: bv ? pr.e - bv.aimed[k] : 0, headsign: pat ? pat.headsign : (pr.destName || ''), dir: pat ? pat.dir : (L.main[0].stopIndex.has(stopId) ? 0 : 1), prox: pr.prox });
+      const tk = bv?.trip ? bv.trip.p.stopIndex.get(stopId) : null;
+      res.push({ t: pr.e, rt: true, aim: bv ? bv.aimed[k] : null, delay: bv ? pr.e - bv.aimed[k] : 0, headsign: pat ? pat.headsign : (pr.destName || ''), dir: pat ? pat.dir : (L.main[0].stopIndex.has(stopId) ? 0 : 1), prox: pr.prox, trip: tk != null ? bv.trip : null, k: tk, day: tk != null ? bv.day : null });
       rtMax = Math.max(rtMax, pr.e);
     }
   } else if (isLive(short)) {
     for (const v of journeys(short)) {
       const k = v.p.stopIndex.get(stopId); if (k == null || k === v.p.stops.length - 1) continue;
       const t = v.tms[k]; if (t < now - 30e3) continue;
-      if (v.trip) used.add(v.trip.tid);
-      res.push({ t, rt: true, aim: v.aimed?.[k], delay: v.aimed ? t - v.aimed[k] : 0, headsign: v.headsign, cancelled: v.cancelled, dir: v.p.dir });
+      if (v.trip) used.add(v.trip.tid + v.day);
+      const tk = v.trip ? v.trip.p.stopIndex.get(stopId) : null;
+      res.push({ t, rt: true, aim: v.aimed?.[k], delay: v.aimed ? t - v.aimed[k] : 0, headsign: v.headsign, cancelled: v.cancelled, dir: v.p.dir, trip: tk != null ? v.trip : null, k: tk, day: tk != null ? v.day : null });
       rtMax = Math.max(rtMax, t);
     }
   }
@@ -214,14 +218,59 @@ function departures(short, stopId, now = Date.now(), n = 4) {
   for (const day of [addDays(td, -1), td, addDays(td, 1)]) {
     const mid = midnight(day), svcs = L.activeSvc(day);
     for (const tr of L.tripObjs) {
-      if (!svcs.has(tr.svc) || used.has(tr.tid)) continue;
+      if (!svcs.has(tr.svc) || used.has(tr.tid + day)) continue;
       const k = tr.p.stopIndex.get(stopId); if (k == null || k === tr.p.stops.length - 1) continue;
       const t = mid + tr.times[k] * 1000; if (t < now - 30e3 || (rtMax && t <= rtMax + 60e3)) continue;
-      res.push({ t, rt: false, headsign: tr.p.headsign, dir: tr.p.dir });
+      res.push({ t, rt: false, headsign: tr.p.headsign, dir: tr.p.dir, trip: tr, k, day });
     }
   }
-  return res.sort((a, b) => a.t - b.t).slice(0, n);
+  const out = res.sort((a, b) => a.t - b.t).slice(0, n);
+  for (const d of out) d.fin = isFin(L, stopId, d);
+  return out;
 }
+
+/* ---------------- « fin » : dernier passage de la soirée ----------------
+   Le GTFS IDFM range les courses d'après minuit (00:20, 00:50…) dans la journée calendaire SUIVANTE, et
+   d'autres réseaux utilisent des heures > 24:00 : le « max de la journée de service » serait donc faux
+   (23:53 au lieu de 00:50 sur le 144). On construit plutôt, pour chaque quai et chaque sens, la frise
+   absolue des départs prévus (heures > 24 h comprises) sur plusieurs jours, et un départ est « fin »
+   quand le suivant, au même quai et dans le même sens, n'arrive pas avant au moins 3 h (coupure de nuit).
+   Restreint au soir/à la nuit (18 h–5 h) pour ne pas qualifier de « fin » une éventuelle coupure de journée. */
+const FIN_GAP = 3 * 3600e3;
+function depTimeline(Ld, day) { // quai|sens -> départs prévus (ms, triés) des journées day-1 … day+2
+  Ld._tl ||= {}; if (Ld._tl[day]) return Ld._tl[day];
+  const m = new Map();
+  for (const dd of [addDays(day, -1), day, addDays(day, 1), addDays(day, 2)]) {
+    const mid = midnight(dd), svcs = Ld.activeSvc(dd);
+    for (const t of Ld.tripObjs) {
+      if (!svcs.has(t.svc)) continue; const P = t.p;
+      for (let k = 0; k < P.stops.length - 1; k++) { const key = P.stops[k] + '|' + P.dir; let a = m.get(key); if (!a) m.set(key, a = []); a.push(mid + t.times[k] * 1000); }
+    }
+  }
+  for (const a of m.values()) a.sort((x, y) => x - y);
+  const keys = Object.keys(Ld._tl); if (keys.length > 6) delete Ld._tl[keys[0]];
+  return (Ld._tl[day] = m);
+}
+function gtfsLastDay(Ld) { return Ld._lastDay ||= Object.values(Ld.services).reduce((m, ds) => ds.length && ds[ds.length - 1] > m ? ds[ds.length - 1] : m, ''); }
+// d : {t, aim?, trip?, k?, day?, dir}. Heure de référence = heure prévue de la course rattachée si connue.
+function isFin(Ld, stopId, d) {
+  let ref = d.trip && d.day ? midnight(d.day) + d.trip.times[d.k] * 1000 : (d.aim || d.t);
+  const h = parisParts(ref).h; if (h >= 5 && h < 18) return false;
+  const arr = depTimeline(Ld, parisParts(ref - 4 * 3600e3).ymd).get(stopId + '|' + d.dir); if (!arr || !arr.length) return false;
+  if (!(d.trip && d.day)) { // passage temps réel non rattaché : on se cale sur le départ prévu le plus proche (±15 min)
+    let best = null; for (const x of arr) if (Math.abs(x - ref) <= 15 * 60e3 && (best == null || Math.abs(x - ref) < Math.abs(best - ref))) best = x;
+    if (best == null) return false; ref = best;
+  }
+  let lo = 0, hi = arr.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (arr[mid] <= ref) lo = mid + 1; else hi = mid; }
+  const next = arr[lo];
+  if (next == null) return addDays(parisParts(ref).ymd, 1) <= gtfsLastDay(Ld); // fin des données : on ne conclut que si le GTFS couvre le lendemain
+  return next - ref >= FIN_GAP;
+}
+const FIN_TAG = '<em class="fin" title="Dernier passage de la soirée à cet arrêt, dans ce sens">fin</em>';
+const finTag = d => d && d.fin ? FIN_TAG : '';
+// Heure / minutes d'un départ, avec « fin » en dessous si c'est le dernier.
+function whenFin(d, now) { const w = whenHTML(d.t, now, d.rt); return d.fin ? `<span class="tw">${w}${FIN_TAG}</span>` : w; }
+
 async function pollRT(short) {
   try {
     const r = await fetch('/api/rt/' + short).then(r => r.json());
@@ -282,6 +331,13 @@ async function viewHome() {
     <p>Horaires à la minute et position de chaque bus sur le tracé des lignes 144, 160, 244 et 360 — de Rueil à La Défense, de Nanterre à Boulogne.</p>
     <div class="search">${SEARCH_SVG}<input id="q" type="search" placeholder="Rechercher un arrêt…" autocomplete="off" aria-label="Rechercher un arrêt"><div class="results" id="results" role="listbox"></div></div>
   </section>
+  <section class="card nb-cta fade-in">
+    <div class="nb-cta-t"><span class="eyebrow">Autour de moi</span><h2>Les bus à deux pas, et <span>on va où&nbsp;?</span></h2><p>Les arrêts près de toi sur une carte, les prochains bus dans chaque direction et si tu as le temps de les attraper. Ou dis-nous où tu vas : on te dit quel bus prendre.</p></div>
+    <div class="nb-cta-a">
+      <a class="mb-btn nb-cta-near" href="#/autour"><svg viewBox="0 0 24 24"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z" stroke-linejoin="round"/><circle cx="12" cy="10" r="2.4"/></svg><span>Bus autour de moi</span></a>
+      <form class="search nb-cta-go" id="goForm">${SEARCH_SVG}<input id="goQ" type="search" placeholder="On va où ? (ex. La Défense)" autocomplete="off" aria-label="On va où ?"><button class="nb-cta-sub" type="submit" aria-label="Chercher">→</button></form>
+    </div>
+  </section>
   <a class="card mb-cta fade-in" href="#/monbus">
     <div class="mb-cta-ic"><div class="mb-sonar sm"><i></i><i></i>${BUS_SVG}</div></div>
     <div class="mb-cta-t"><span class="eyebrow">Nouveau</span><h2>Est-ce que j'ai mon bus&nbsp;?</h2><p>Ton adresse, ta ligne : on calcule le trajet à pied jusqu'à l'arrêt et on te dit quand partir.</p></div>
@@ -298,6 +354,7 @@ async function viewHome() {
     <div class="card"><span class="tag" style="background:var(--chip)">Précision</span><h4>À la seconde, arrêt par arrêt</h4><p>Chaque course est suivie entre deux arrêts consécutifs le long du tracé réel de la ligne.</p></div>
   </div>`;
   animateWave($('.hero-wave'));
+  $('#goForm').onsubmit = e => { e.preventDefault(); const q = $('#goQ').value.trim(); location.hash = q ? '#/autour?to=' + encodeURIComponent(q) : '#/autour?v=go'; };
   $$('.mb-cta-l').forEach(b => b.addEventListener('click', e => { e.preventDefault(); location.hash = b.dataset.href; }));
   if (S.favs.length) { const fh = $$('.section-h')[1], fv = $('#favs'), lh = $$('.section-h')[0]; lh.before(fh); lh.before(fv); fh.style.marginTop = '10px'; }
   const idx = stopIndexAll(); const q = $('#q'), res = $('#results'); let sel = -1;
@@ -326,7 +383,7 @@ async function viewHome() {
       for (const l of S.lines) { const L = S.data[l.short]; for (const s of Object.values(L.stops)) if (s.key === key) for (const d of departures(l.short, s.id, now, 2)) rows.push({ ...d, l }); }
       rows.sort((a, b) => a.t - b.t);
       const name = idx.find(e => e.key === key)?.name || key;
-      return `<a class="card fav-card" href="#/arret/${encodeURIComponent(key)}"><h3>${esc(name)}<span style="color:#FFD15C">★</span></h3>${rows.slice(0, 4).map(d => `<div class="dep">${badge(d.l, 'sm')}<span class="dest">→ ${esc(d.headsign)}</span>${whenHTML(d.t, now, d.rt)}</div>`).join('') || '<div class="muted">Pas de passage prévu</div>'}</a>`;
+      return `<a class="card fav-card" href="#/arret/${encodeURIComponent(key)}"><h3>${esc(name)}<span style="color:#FFD15C">★</span></h3>${rows.slice(0, 4).map(d => `<div class="dep">${badge(d.l, 'sm')}<span class="dest">→ ${esc(d.headsign)}</span>${whenFin(d, now)}</div>`).join('') || '<div class="muted">Pas de passage prévu</div>'}</a>`;
     }).join('')}</div>`;
   };
   favRender();
@@ -349,14 +406,29 @@ async function viewHome() {
 
 /* ---------------- Vue ligne ---------------- */
 let MAP = null;
-// Fonds de carte : Stadia « Alidade Smooth » (gratuit en local / domaine déclaré), repli automatique sur Esri Canvas.
-let TILE_FALLBACK = !/^(localhost|127\.|\[::1\])/.test(location.hostname) || localStorage.getItem('onde-tiles') === 'esri'; // Stadia sans compte = localhost uniquement
+// Fonds de carte : OpenStreetMap (sans clé, net jusqu'au zoom 19), adouci par un filtre CSS accordé au thème
+// (gris clair épuré / sombre « nuit ») ; repli automatique sur Esri Canvas si les tuiles OSM échouent.
+let TILE_FALLBACK = localStorage.getItem('onde-tiles2') === 'esri';
 const isLight = () => document.documentElement.dataset.theme === 'light';
 function tileUrl() {
   if (TILE_FALLBACK) return isLight() ? 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}' : 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}';
-  return isLight() ? 'https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png' : 'https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png';
+  return 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 }
-const tileAttr = () => TILE_FALLBACK ? 'Tiles &copy; Esri &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap' : '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+const tileAttr = () => TILE_FALLBACK ? 'Tiles &copy; Esri &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap' : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+// Couche de tuiles partagée par toutes les cartes (bascule thème + repli automatique).
+function addTiles(map) {
+  let layer = null, err = 0;
+  const make = () => {
+    if (layer) layer.remove();
+    layer = L.tileLayer(tileUrl(), { maxZoom: 20, maxNativeZoom: TILE_FALLBACK ? 16 : 19, attribution: tileAttr(), updateWhenZooming: false, keepBuffer: 4, className: 'onde-tiles' + (TILE_FALLBACK ? ' esri' : ' osm') }).addTo(map);
+    layer.on('tileerror', () => { if (!TILE_FALLBACK && ++err >= 4) { TILE_FALLBACK = true; localStorage.setItem('onde-tiles2', 'esri'); make(); } });
+    layer.bringToBack();
+  };
+  make();
+  return { refresh: make, get layer() { return layer; } };
+}
+// Options communes : carte fluide (zoom fractionnaire, inertie, molette douce, pincement).
+const MAP_OPTS = { zoomControl: false, attributionControl: true, zoomSnap: 0.25, zoomDelta: 0.5, wheelPxPerZoomLevel: 110, wheelDebounceTime: 30, inertia: true, inertiaDeceleration: 2600, easeLinearity: 0.2, tapTolerance: 18, bounceAtZoomLimits: false, minZoom: 10, maxZoom: 20 };
 function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
 function busIcon(meta, v, cls = '') {
   return L.divIcon({ className: '', iconSize: [34, 34], iconAnchor: [17, 17], html: `<div class="bus-mk ${v.rt ? 'rt' : 'th'} ${cls}" style="--c:${meta.color};--t:${meta.textColor}"><span class="ring"></span><span class="ring r2"></span><span class="head"></span><span class="core">${BUS_SVG}</span></div>` });
@@ -415,13 +487,10 @@ async function viewLine(short, params) {
       </div>
     </div>`;
     // carte
-    const map = L.map('map', { zoomControl: false, attributionControl: true, preferCanvas: false });
+    const map = L.map('map', MAP_OPTS);
     MAP = map; L.control.zoom({ position: 'bottomright' }).addTo(map);
-    let tiles; let tileErr = 0;
-    const mkTiles = () => { if (tiles) tiles.remove(); tiles = L.tileLayer(tileUrl(), { maxZoom: 19, maxNativeZoom: TILE_FALLBACK ? 16 : 20, attribution: tileAttr() }).addTo(map);
-      tiles.on('tileerror', () => { if (!TILE_FALLBACK && ++tileErr >= 3) { TILE_FALLBACK = true; localStorage.setItem('onde-tiles', 'esri'); mkTiles(); } }); };
-    mkTiles();
-    const onTheme = () => { mkTiles(); drawStatic(); };
+    const tiles = addTiles(map);
+    const onTheme = () => { tiles.refresh(); drawStatic(); };
     window.addEventListener('onde-theme', onTheme); local.push(() => window.removeEventListener('onde-theme', onTheme));
     let staticLayer = L.layerGroup().addTo(map); const stopMk = {};
     function drawStatic() {
@@ -440,8 +509,8 @@ async function viewLine(short, params) {
     }
     drawStatic();
     const bounds = L.latLngBounds(M.shape.map(p => [p[0], p[1]]));
-    const fit = () => map.fitBounds(bounds, { padding: [30, 30] });
-    fit(); $('#fit').onclick = () => { st.selBus = null; fit(); };
+    const fit = (anim) => anim ? map.flyToBounds(bounds, { padding: [30, 30], duration: .8 }) : map.fitBounds(bounds, { padding: [30, 30] });
+    fit(); $('#fit').onclick = () => { st.selBus = null; fit(true); };
     setTimeout(() => map.invalidateSize(), 50);
     // bus
     const markers = new Map(); const dgm = $('#dgm'); const dgmBus = new Map();
@@ -497,8 +566,9 @@ async function viewLine(short, params) {
       for (const el of $$('[data-nx]', dgm)) {
         const d = departures(short, el.dataset.nx, now, 2).filter(x => x.dir === st.dir || true);
         const a = d[0], b = d[1];
-        el.innerHTML = a ? `<span class="m ${a.rt ? 'rt' : 'th'}">${a.t - now < 60000 ? '<1' : Math.floor((a.t - now) / 60000)}′</span>${b ? `<span class="m2">${b.t - now < 3600e3 ? Math.floor((b.t - now) / 60000) + '′' : fmtHM(b.t)}</span>` : ''}` : '<span class="m2">—</span>';
-        if (a && a.t - now >= 3600e3) el.innerHTML = `<span class="m th">${fmtHM(a.t)}</span>`;
+        const fx = (h, d) => d && d.fin ? `<span class="tw">${h}${FIN_TAG}</span>` : h;
+        el.innerHTML = a ? `${fx(`<span class="m ${a.rt ? 'rt' : 'th'}">${a.t - now < 60000 ? '<1' : Math.floor((a.t - now) / 60000)}′</span>`, a)}${b ? fx(`<span class="m2">${b.t - now < 3600e3 ? Math.floor((b.t - now) / 60000) + '′' : fmtHM(b.t)}</span>`, b) : ''}` : '<span class="m2">—</span>';
+        if (a && a.t - now >= 3600e3) el.innerHTML = fx(`<span class="m th">${fmtHM(a.t)}</span>`, a);
       }
       if (st.stop) renderPanel();
       modeTag(); const lt = $('#legTag'); if (lt) { lt.className = 'tag ' + (isLive(short) ? 'rt' : 'th'); lt.textContent = isLive(short) ? 'Temps réel' : 'Théorique'; }
@@ -520,7 +590,7 @@ async function viewLine(short, params) {
       const s = Ld.stops[sid]; const now = Date.now(); const d = departures(short, sid, now, 6);
       $('#panel').innerHTML = `<div class="card panel fade-in"><div class="panel-h"><div><span class="eyebrow">Arrêt sélectionné</span><h3>${esc(s.name)}</h3><span class="muted" style="font-size:13px">Direction ${esc(M.headsign)}${s.wheelchair ? ' · ♿ accessible' : ''}</span></div>
         <div class="actions"><button class="star ${isFav(s.key) ? 'on' : ''}" id="favBtn" aria-label="Favori">${STAR_SVG}</button></div></div>
-        <div class="dep-group">${d.map(x => `<div class="dep"><span class="dest">→ ${esc(x.headsign)}</span>${x.rt && x.aim && Math.abs(x.delay) >= 60e3 ? `<s>${fmtHM(x.aim)}</s>` : ''}<span class="faint" style="font-family:var(--mono);font-size:13px">${fmtHM(x.t)}</span>${whenHTML(x.t, now, x.rt)}</div>`).join('') || '<div class="muted">Aucun passage prévu prochainement.</div>'}</div>
+        <div class="dep-group">${d.map(x => `<div class="dep"><span class="dest">→ ${esc(x.headsign)}</span>${x.rt && x.aim && Math.abs(x.delay) >= 60e3 ? `<s>${fmtHM(x.aim)}</s>` : ''}<span class="faint" style="font-family:var(--mono);font-size:13px">${fmtHM(x.t)}</span>${whenFin(x, now)}</div>`).join('') || '<div class="muted">Aucun passage prévu prochainement.</div>'}</div>
         <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><a class="chip" href="#/arret/${encodeURIComponent(s.key)}">Toutes les lignes à cet arrêt</a><button class="chip" id="ttGo">Fiche horaire de l'arrêt</button></div></div>`;
       $('#favBtn').onclick = () => { toggleFav(s.key); renderPanel(); };
       $('#ttGo').onclick = () => { st.ttStop = sid; st.tab = 'tt'; showTab(); };
@@ -555,7 +625,7 @@ async function viewLine(short, params) {
         const sec = t.times[k] + off; if (off ? sec >= 86400 + D4 || t.times[k] >= D4 : t.times[k] < D4) continue;
         const term = Ld.stops[t.p.stops[t.p.stops.length - 1]].name; const mainTerm = Ld.stops[M.stops[M.stops.length - 1]].name;
         let mark = ''; if (term !== mainTerm) { if (!variants.has(term)) variants.set(term, String.fromCharCode(97 + variants.size)); mark = variants.get(term); }
-        rows.push({ s: sec, mark, ms: mid + sec * 1000 });
+        rows.push({ s: sec, mark, ms: mid + sec * 1000, fin: isFin(Ld, st.ttStop, { t: mid + sec * 1000, trip: t, k, day, dir: st.dir }) });
       }
       }
       rows.sort((a, b) => a.s - b.s);
@@ -573,8 +643,8 @@ async function viewLine(short, params) {
           <div>Fréquence (pointe)<b>${pg.length ? '~' + Math.round(med(pg) / 60) + ' min' : gaps.length ? '~' + Math.round(med(gaps) / 60) + ' min' : '—'}</b></div>
           <div>Jour<b style="font-size:16px;margin-top:6px">${dayLong(st.ttDay)}</b></div>
         </div>
-        <div class="tt-grid">${[...byH.entries()].map(([h, list]) => `<div class="tt-h ${h % 24 === curH && h < 24 ? 'now' : ''}">${pad(h % 24)}h</div><div class="tt-m">${list.map(r => `<span class="${r.ms < now - 30e3 ? 'past' : ''} ${r.i === nextIdx ? 'next' : ''}">${pad(Math.floor(r.s / 60) % 60)}${r.mark ? `<sup>${r.mark}</sup>` : ''}</span>`).join('')}</div>`).join('')}</div>
-        <div class="tt-notes">Direction <b>${esc(M.headsign)}</b> · horaires prévus à l'arrêt <b>${esc(Ld.stops[st.ttStop].name)}</b>.${[...variants.entries()].map(([t, m]) => ` <sup style="color:var(--theo)">${m}</sup> terminus ${esc(t)}.`).join('')} Journée de service de 4 h à 4 h : les passages après minuit figurent en fin de grille. Source : GTFS IDFM, mis à jour le ${esc((Ld.generated || '').slice(0, 10).split('-').reverse().join('/'))}.</div>`
+        <div class="tt-grid">${[...byH.entries()].map(([h, list]) => `<div class="tt-h ${h % 24 === curH && h < 24 ? 'now' : ''}">${pad(h % 24)}h</div><div class="tt-m">${list.map(r => `<span class="${r.ms < now - 30e3 ? 'past' : ''} ${r.i === nextIdx ? 'next' : ''} ${r.fin ? 'has-fin' : ''}">${pad(Math.floor(r.s / 60) % 60)}${r.mark ? `<sup>${r.mark}</sup>` : ''}${r.fin ? FIN_TAG : ''}</span>`).join('')}</div>`).join('')}</div>
+        <div class="tt-notes">Direction <b>${esc(M.headsign)}</b> · horaires prévus à l'arrêt <b>${esc(Ld.stops[st.ttStop].name)}</b>.${[...variants.entries()].map(([t, m]) => ` <sup style="color:var(--theo)">${m}</sup> terminus ${esc(t)}.`).join('')} Journée de service de 4 h à 4 h : les passages après minuit figurent en fin de grille. <em class="fin">fin</em> = dernier passage de la soirée. Source : GTFS IDFM, mis à jour le ${esc((Ld.generated || '').slice(0, 10).split('-').reverse().join('/'))}.</div>`
         : `<div class="empty" style="margin:16px">Aucun passage prévu à cet arrêt ce jour-là.</div>`;
       if (!draw.done) { draw.done = true; const nx = $('#tt .tt-m span.next'); if (nx) setTimeout(() => nx.scrollIntoView({ block: 'center', behavior: 'smooth' }), 350); }
     };
@@ -612,7 +682,7 @@ async function viewStop(key) {
       if (q) groups.push({ sh, d, deps, M, q });
     }
     $('#stopCards').innerHTML = groups.map(g => `<div class="card fav-card fade-in" style="--line:${S.meta[g.sh].color}"><h3><span style="display:flex;gap:10px;align-items:center">${badge(S.meta[g.sh], 'sm')}<span>→ ${esc(g.M.headsign)}</span></span><a class="chip" href="#/ligne/${g.sh}?${g.d ? 'd=1&' : ''}s=${g.q}">Voir la ligne</a></h3>
-      ${g.deps.map(x => `<div class="dep"><span class="dest">${esc(x.headsign)}</span>${x.rt && x.aim && Math.abs(x.delay) >= 60e3 ? `<s>${fmtHM(x.aim)}</s>` : ''}<span class="faint" style="font-family:var(--mono);font-size:13px">${fmtHM(x.t)}</span>${whenHTML(x.t, now, x.rt)}</div>`).join('') || '<div class="muted">Aucun passage prévu prochainement.</div>'}</div>`).join('');
+      ${g.deps.map(x => `<div class="dep"><span class="dest">${esc(x.headsign)}</span>${x.rt && x.aim && Math.abs(x.delay) >= 60e3 ? `<s>${fmtHM(x.aim)}</s>` : ''}<span class="faint" style="font-family:var(--mono);font-size:13px">${fmtHM(x.t)}</span>${whenFin(x, now)}</div>`).join('') || '<div class="muted">Aucun passage prévu prochainement.</div>'}</div>`).join('');
   };
   every(10000, draw);
   every(30000, () => shorts.forEach(pollRT));
@@ -626,6 +696,7 @@ async function route() {
   if ((m = /^\/ligne\/(\d{3})/.exec(path))) await viewLine(m[1], params);
   else if ((m = /^\/arret\/(.+)/.exec(path))) await viewStop(decodeURIComponent(m[1]));
   else if (/^\/monbus/.test(path)) await viewMonBus(params);
+  else if (/^\/autour/.test(path)) await viewAutour(params);
   else await viewHome();
   updateLivePill(); window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
 }

@@ -171,8 +171,8 @@ async function viewMonBus(params) {
       out.innerHTML = `<div class="card mb-verdict" id="verdict"></div>
         <div class="card mb-map-card"><div id="mbMap"></div><div class="map-legend"><span class="chip" id="walkChip">${WALK_SVG}<span>…</span></span></div></div>
         <div class="card mb-list"><div class="mb-list-h"><span class="eyebrow">Prochains passages à <span id="stopName"></span></span><span id="modeTag"></span></div><div id="depList"></div></div>`;
-      map = L.map('mbMap', { zoomControl: false, attributionControl: true }); L.control.zoom({ position: 'bottomright' }).addTo(map);
-      L.tileLayer(tileUrl(), { maxZoom: 19, maxNativeZoom: TILE_FALLBACK ? 16 : 20, attribution: tileAttr() }).addTo(map);
+      map = L.map('mbMap', MAP_OPTS); L.control.zoom({ position: 'bottomright' }).addTo(map);
+      addTiles(map);
       layers = L.layerGroup().addTo(map); busLayer = L.layerGroup().addTo(map);
       S.cleanup.push(() => { if (map) { map.remove(); map = null; } });
     }
@@ -194,7 +194,7 @@ async function viewMonBus(params) {
     st.walk = w;
     L.polyline(w.path, { color: cssVar('--bg2') || '#000', weight: 8, opacity: .9, interactive: false, lineCap: 'round', lineJoin: 'round' }).addTo(layers);
     L.polyline(w.path, { color: cssVar('--live') || '#3CF0B0', weight: 4.5, opacity: 1, dashArray: '1 9', lineCap: 'round', lineJoin: 'round', interactive: false, className: 'mb-walk' }).addTo(layers);
-    map.fitBounds(L.latLngBounds(w.path), { padding: [48, 48], maxZoom: 17 });
+    map.flyToBounds(L.latLngBounds(w.path), { padding: [48, 48], maxZoom: 17, duration: .8 });
     $('#walkChip span').textContent = `${fmtDur(w.duration)} à pied · ${fmtDist(w.distance)}${w.source === 'approx' ? ' (estimé)' : ''}`;
     refreshDeps(); tick(true);
     pollRT(st.short).then(() => { refreshDeps(); tick(true); });
@@ -226,7 +226,7 @@ async function viewMonBus(params) {
       const k = d.v.k; const nextOk = list.slice(list.indexOf(d) + 1).find(x => x.v.k !== 'miss');
       const msg = k === 'ok' ? `Tu l'as — pars avant ${fmtHM(d.v.leaveBy)}` : k === 'tight' ? 'Juste — pars maintenant en pressant le pas' : `Raté — prochain à ${nextOk ? fmtHM(nextOk.t) : '—'}`;
       const cd = k === 'ok' ? (d.v.left < 60e3 ? 'Pars maintenant' : `Pars dans ${fmtCount(d.v.left)}`) : k === 'tight' ? `Bus dans ${fmtCount(d.t - now)}` : `Bus dans ${fmtCount(d.t - now)}`;
-      return `<div class="mb-dep ${k}"><div class="mb-dep-time"><b>${fmtHM(d.t)}</b>${d.rt ? '<span class="tag rt"><i class="dot-live"></i>Live</span>' : '<span class="tag th">Prévu</span>'}${d.rt && d.aim && Math.abs(d.delay) >= 60e3 ? `<s>${fmtHM(d.aim)}</s>` : ''}</div>
+      return `<div class="mb-dep ${k}"><div class="mb-dep-time"><b>${fmtHM(d.t)}</b>${finTag(d)}${d.rt ? '<span class="tag rt"><i class="dot-live"></i>Live</span>' : '<span class="tag th">Prévu</span>'}${d.rt && d.aim && Math.abs(d.delay) >= 60e3 ? `<s>${fmtHM(d.aim)}</s>` : ''}</div>
         <div class="mb-dep-m"><span class="mb-dep-v"><i></i>${msg}</span><small>${cd} · → ${esc(d.headsign)}${d.prox ? ' · ' + esc(d.prox) : ''}</small></div>
         <div class="mb-dep-bar"><span style="width:${Math.max(4, Math.min(100, 100 - (d.t - now) / 600 / 30)).toFixed(1)}%"></span></div></div>`;
     }).join('') || '<div class="muted" style="padding:14px 0">Aucun passage prévu prochainement.</div>';

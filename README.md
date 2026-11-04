@@ -17,6 +17,11 @@ Aucune dépendance npm. La clé ne quitte jamais le serveur.
 ## « Est-ce que j'ai mon bus ? » (`#/monbus`)
 Point de départ (géolocalisation ou adresse via api-adresse.data.gouv.fr, mémorisable « Maison » dans le navigateur) → choix de la ligne (tuiles) ou des arrêts les plus proches sur les 4 lignes → sens + arrêt. Trajet à pied OSRM (routing.openstreetmap.de, profil piéton), repli ligne droite ×1,3 à 4,8 km/h. Pour les 3 prochains bus (temps réel sinon théorique) : « Tu l'as — pars avant HH:MM » (marge 1 min), « Juste — pars maintenant en pressant le pas » (marche à 75 % du temps), « Raté — prochain à HH:MM », compte à rebours en direct.
 
+## « Autour de moi » et « On va où ? » (`#/autour`)
+Adresse (BAN) ou « Me localiser » : carte des arrêts des 4 lignes à moins de 800 m (repli 1,5 km), triés par temps de marche (OSRM piéton, estimation sinon), et prochains bus par ligne et par direction (filtre « Je vais vers »), avec minutes, source (Live = estimation PRIM / Prévu = GTFS), verdict « Tu l'as / Juste / Raté » et le bus suivant. « On va où ? » cherche, pour chaque ligne et sens, l'arrêt de montée près du départ et l'arrêt de descente près de la destination (≤ 1 km, arrêts de même nom regroupés : « La Défense »), avec temps de trajet tiré des horaires GTFS de la course. Si aucune ligne ne convient, le site le dit. Aucun appel PRIM supplémentaire : le navigateur réutilise les endpoints `/api/rt/<ligne>` en cache CDN.
+
+« fin » sous un horaire = dernier passage de la soirée à cet arrêt dans ce sens (prochain départ ≥ 3 h plus tard ; gère les courses après minuit qu'IDFM range dans la journée de service suivante).
+
 ## API locale
 - `GET /api/status` — clé présente ?, budget consommé, état des données GTFS (`gtfs.source` = `commit` ou `live`).
 - `GET /api/rt/144` — courses temps réel normalisées (ou `mode: "theorique"`).
