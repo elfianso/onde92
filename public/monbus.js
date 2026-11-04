@@ -2,60 +2,6 @@
    Point de départ (géolocalisation ou adresse BAN) → arrêt d'une ligne → itinéraire piéton (OSRM foot)
    → pour chacun des 3 prochains passages : tu l'as / juste / raté, avec compte à rebours. */
 'use strict';
-const HOME_SVG = '<svg viewBox="0 0 24 24"><path d="M4 11l8-7 8 7v8a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z" stroke-linejoin="round"/></svg>';
-const GPS_SVG = '<svg viewBox="0 0 24 24"><path d="M12 2l7.5 18.5-7.5-4-7.5 4z" transform="rotate(45 12 12)" stroke-linejoin="round"/></svg>';
-const WALK_SVG = '<svg viewBox="0 0 24 24"><circle cx="13" cy="4" r="2" fill="currentColor" stroke="none"/><path d="M10 21l2-6 3 3v3M9 12l1.5-4 3.5 1 2 3 2 1M10.5 8L7 10l-1 3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-const MB = {
-  BUFFER: 60e3,        // on vise d'être à l'arrêt 1 min avant le bus
-  HURRY: 0.75,         // en pressant le pas : ~25 % plus vite (≈ 6 km/h)
-  SPEED: 4.8 / 3.6,    // repli : 4,8 km/h, distance à vol d'oiseau × 1,3
-  walkCache: new Map(),
-};
-const mbGet = (k, d = null) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (e) { return d; } };
-const mbSet = (k, v) => v == null ? localStorage.removeItem(k) : localStorage.setItem(k, JSON.stringify(v));
-function haversine(a, b) { const R = 6371000, r = Math.PI / 180; const dLa = (b[0] - a[0]) * r, dLo = (b[1] - a[1]) * r; const x = Math.sin(dLa / 2) ** 2 + Math.cos(a[0] * r) * Math.cos(b[0] * r) * Math.sin(dLo / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(x)); }
-const fmtDist = m => m < 1000 ? `${Math.round(m / 10) * 10} m` : `${(m / 1000).toFixed(1).replace('.', ',')} km`;
-const fmtDur = s => { const m = Math.max(1, Math.round(s / 60)); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${pad(m % 60)}`; };
-function fmtCount(ms) { if (ms <= 0) return 'maintenant'; const s = Math.round(ms / 1000); if (s < 60) return `${s} s`; const m = Math.floor(s / 60); return m < 60 ? `${m} min ${pad(s % 60)} s` : `${Math.floor(m / 60)} h ${pad(m % 60)}`; }
-
-// Arrêts (quais) d'une ligne dans un sens, dans l'ordre du parcours principal, sans les terminus d'arrivée.
-function lineDirStops(short, dir) {
-  const Ld = S.data[short]; const M = Ld.main[dir]; const seen = new Set(); const out = [];
-  const add = (p, k) => { const sid = p.stops[k]; if (seen.has(sid) || k === p.stops.length - 1) return; seen.add(sid); out.push({ sid, s: Ld.stops[sid], order: M.stopIndex.has(sid) ? M.stopIndex.get(sid) : (M.stopIndex.get(p.stops[k + 1]) ?? 99) - .5 }); };
-  M.stops.forEach((_, k) => add(M, k));
-  for (const p of Ld.patterns) if (p.dir === dir && p !== M && p.n >= 3) p.stops.forEach((_, k) => add(p, k));
-  return out.sort((a, b) => a.order - b.order);
-}
-function nearestStops(origin, short, dir, n = 3) {
-  return lineDirStops(short, dir).map(x => ({ ...x, d: haversine([origin.lat, origin.lon], [x.s.lat, x.s.lon]) })).sort((a, b) => a.d - b.d).slice(0, n);
-}
-function suggestAll(origin) {
-  const out = [];
-  for (const l of S.lines) for (const dir of [0, 1]) { const [b] = nearestStops(origin, l.short, dir, 1); if (b && b.d < 2000) out.push({ short: l.short, dir, ...b }); }
-  return out.sort((a, b) => a.d - b.d);
-}
-async function walkRoute(origin, stop) {
-  const key = `${origin.lat.toFixed(5)},${origin.lon.toFixed(5)}>${stop.lat},${stop.lon}`;
-  if (MB.walkCache.has(key)) return MB.walkCache.get(key);
-  let w;
-  try {
-    const r = await fetch(`/api/walk?from=${origin.lat},${origin.lon}&to=${stop.lat},${stop.lon}`); if (!r.ok) throw new Error(r.status);
-    w = await r.json(); w.path.unshift([origin.lat, origin.lon]); w.path.push([stop.lat, stop.lon]);
-    // OSRM foot compte ~4,5 km/h ; on garde sa durée (feux, traversées compris)
-  } catch (e) {
-    const d = haversine([origin.lat, origin.lon], [stop.lat, stop.lon]) * 1.3;
-    w = { source: 'approx', distance: Math.round(d), duration: Math.round(d / MB.SPEED), path: [[origin.lat, origin.lon], [stop.lat, stop.lon]] };
-  }
-  MB.walkCache.set(key, w); return w;
-}
-// Verdict pour un passage à l'heure t (ms) avec une marche de walkSec secondes.
-function verdict(t, walkSec, now) {
-  const leaveBy = t - walkSec * 1000 - MB.BUFFER;
-  const hurryBy = t - walkSec * 1000 * MB.HURRY;
-  if (leaveBy - now >= 0) return { k: 'ok', leaveBy, left: leaveBy - now };
-  if (hurryBy - now >= 0) return { k: 'tight', leaveBy: hurryBy, left: hurryBy - now };
-  return { k: 'miss', leaveBy, left: leaveBy - now };
-}
 
 async function viewMonBus(params) {
   setLineTheme(null); S.view = { name: 'monbus' }; document.title = "Est-ce que j'ai mon bus ? — Onde 92";

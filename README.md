@@ -1,6 +1,16 @@
 # Onde 92 — bus 144 · 160 · 244 · 360 en direct
 
-Site (FR) : horaires précis + suivi des bus le long du tracé, carte Leaflet, schéma de ligne, favoris, recherche d'arrêt, fiche horaire par jour, thème clair/sombre.
+Site (FR), un seul écran : le site demande ta position et affiche tout de suite les bus des 4 lignes autour de toi, avec une barre « Où vas-tu ? » pour trouver le bus qui t'y emmène. Les pages par ligne (schéma, fiche horaire, favoris) restent accessibles via « Lignes et horaires » (`/lignes.html`).
+
+## Écran principal (`/`)
+- `public/index.html` + `public/onde.js` + `public/onde.css`, moteur commun dans `public/core.js` (horaires, temps réel, marche, verdicts, itinéraire), partagé avec `/lignes.html`.
+- Carte MapLibre GL 5 (vendorisée dans `public/vendor/maplibre/`, UMD), fond OpenFreeMap « liberty » (clair) / « dark » (sombre), bouton satellite (Esri World Imagery + noms de rues). Rotation et inclinaison désactivées.
+- Chaque arrêt porte des pastilles colorées de ses lignes (images dessinées en canvas, couche symbole avec détection de collision : points dès z12, pastilles dès z13,4, noms dès z15,6 ; les arrêts proches passent en priorité). Toucher un arrêt → prochains bus par ligne et par direction.
+- Position en point bleu, bus en circulation interpolés le long du tracé avec halo « sonar ».
+- Géolocalisation acceptée → arrêts à moins de 800 m (élargi à 1,5 puis 2,5 km si rien), meilleure option par ligne et direction (« vers <terminus> »), minutes Live/Prévu, bus suivants, temps de marche et verdict ; toucher une ligne → arrêt, départs suivants, « fin ». Refusée/indisponible → un seul champ adresse.
+- « Où vas-tu ? » (BAN + arrêts) → lignes possibles : montée, descente, prochain départ + verdict, durée ; sinon « aucune des 4 lignes ne t'y emmène ».
+- Mobile : carte en haut (~46 % de l'écran) + feuille. Bureau (≥ 900 px) : panneau à gauche + carte. Thème clair/sombre mémorisé.
+- Anciennes URL `#/ligne/…`, `#/arret`, `#/monbus` redirigées vers `/lignes.html`.
 
 ## Lancer
     node server.js                      # http://localhost:8092 — mode théorique
@@ -14,10 +24,10 @@ Aucune dépendance npm. La clé ne quitte jamais le serveur.
 - `scripts/update-gtfs.sh` : télécharge le GTFS IDFM (~115 Mo) et régénère `public/data/line-XXX.json` (arrêts + coordonnées, tracés simplifiés, distances le long du tracé, toutes les courses avec leurs heures à chaque arrêt, calendrier par date). Le GTFS ne couvre que ~30 jours : relancer au moins chaque semaine (cron).
 - Temps réel : PRIM « Prochains passages — requête ligne » (`/marketplace/estimated-timetable?LineRef=STIF:Line::C01169:`), 1 appel par ligne, cache ≥ 60 s et lissage automatique sur le quota journalier.
 
-## « Est-ce que j'ai mon bus ? » (`#/monbus`)
+## « Est-ce que j'ai mon bus ? » (`/lignes.html#/monbus`)
 Point de départ (géolocalisation ou adresse via api-adresse.data.gouv.fr, mémorisable « Maison » dans le navigateur) → choix de la ligne (tuiles) ou des arrêts les plus proches sur les 4 lignes → sens + arrêt. Trajet à pied OSRM (routing.openstreetmap.de, profil piéton), repli ligne droite ×1,3 à 4,8 km/h. Pour les 3 prochains bus (temps réel sinon théorique) : « Tu l'as — pars avant HH:MM » (marge 1 min), « Juste — pars maintenant en pressant le pas » (marche à 75 % du temps), « Raté — prochain à HH:MM », compte à rebours en direct.
 
-## « Autour de moi » et « On va où ? » (`#/autour`)
+## Logique « Autour de moi » / « On va où ? » (reprise par l'écran principal)
 Adresse (BAN) ou « Me localiser » : carte des arrêts des 4 lignes à moins de 800 m (repli 1,5 km), triés par temps de marche (OSRM piéton, estimation sinon), et prochains bus par ligne et par direction (filtre « Je vais vers »), avec minutes, source (Live = estimation PRIM / Prévu = GTFS), verdict « Tu l'as / Juste / Raté » et le bus suivant. « On va où ? » cherche, pour chaque ligne et sens, l'arrêt de montée près du départ et l'arrêt de descente près de la destination (≤ 1 km, arrêts de même nom regroupés : « La Défense »), avec temps de trajet tiré des horaires GTFS de la course. Si aucune ligne ne convient, le site le dit. Aucun appel PRIM supplémentaire : le navigateur réutilise les endpoints `/api/rt/<ligne>` en cache CDN.
 
 « fin » sous un horaire = dernier passage de la soirée à cet arrêt dans ce sens (prochain départ ≥ 3 h plus tard ; gère les courses après minuit qu'IDFM range dans la journée de service suivante).
