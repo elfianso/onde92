@@ -386,7 +386,13 @@ function nbPlaces() {
 // « La Défense (Calder - Miro) » et « La Défense (voie Perronet Nord) » = même pôle « la defense ».
 const nbBase = n => String(n).replace(/\s*\([^)]*\)\s*$/, '');
 const nbGroup = n => norm(nbBase(n));
-// Recherche combinée : arrêts des 4 lignes (instantané) + adresses/lieux BAN.
+// Recherche combinée : arrêts des 4 lignes (instantané) + lieux OSM (Photon/Nominatim) et adresses BAN.
+function nbPlaceCaption(h) {
+  if (h.kind === 'stop') return 'Arrêt';
+  const T = { housenumber: 'Adresse', street: 'Rue', municipality: 'Commune', locality: 'Lieu', shop: 'Commerce', school: 'École', food: 'Restaurant', station: 'Gare / station', park: 'Parc', landmark: 'Lieu', health: 'Santé', culture: 'Culture', civic: 'Service', place: 'Lieu' };
+  const t = T[h.type] || 'Lieu';
+  return t + (h.city && !String(h.label).includes(h.city) ? ' · ' + h.city : '');
+}
 function nbStopHits(q) {
   const v = norm(q); if (v.length < 2) return [];
   const w = v.split(' ');
@@ -401,23 +407,24 @@ function nbStopHits(q) {
 function nbSearch(input, box, onPick) {
   let tmr, seq = 0, hits = [], sel = -1;
   const render = () => {
-    box.innerHTML = hits.map((h, i) => `<button class="result ${i === sel ? 'sel' : ''}" data-i="${i}" role="option" type="button"><span class="nb-r-ic ${h.kind === 'stop' ? 'stop' : ''}">${h.kind === 'stop' ? BUS_SVG : PIN_SVG}</span><span class="nb-r-t">${esc(h.label)}<small>${h.kind === 'stop' ? 'Arrêt' : esc(h.type === 'housenumber' ? 'Adresse' : h.type === 'street' ? 'Rue' : h.type === 'municipality' ? 'Commune' : 'Lieu')}${h.city && h.kind !== 'stop' && !String(h.label).includes(h.city) ? ' · ' + esc(h.city) : ''}</small></span>${h.lines ? `<span class="rb">${h.lines.map(s => badge(S.meta[s], 'sm')).join('')}</span>` : ''}</button>`).join('');
+    box.innerHTML = hits.map((h, i) => `<button class="result ${i === sel ? 'sel' : ''}" data-i="${i}" role="option" type="button"><span class="nb-r-ic ${h.kind === 'stop' ? 'stop' : (h.type || '')}">${h.kind === 'stop' ? BUS_SVG : PIN_SVG}</span><span class="nb-r-t">${esc(h.label)}<small>${esc(nbPlaceCaption(h))}</small></span>${h.lines ? `<span class="rb">${h.lines.map(s => badge(S.meta[s], 'sm')).join('')}</span>` : ''}</button>`).join('');
   };
   const run = async q => {
     const my = ++seq; const stops = nbStopHits(q); hits = stops; sel = -1; render();
     if (q.length < 3) return hits;
     try {
-      const r = await fetch('/api/geocode?q=' + encodeURIComponent(q)).then(r => r.json()); if (my !== seq) return hits;
-      // On remonte les adresses de la commune tapée, puis celles proches du réseau (les 4 lignes).
-      const nq = norm(q), pl = nbPlaces();
-      const rank = a => (a.city && nq.includes(norm(a.city)) ? 0 : 2) + (pl.some(p => Math.abs(p.lat - a.lat) < .03 && haversine([p.lat, p.lon], [a.lat, a.lon]) < 2000) ? 0 : 1);
-      const addr = (r.results || []).filter(a => !stops.some(s => haversine([s.lat, s.lon], [a.lat, a.lon]) < 60)).map((a, i) => ({ ...a, kind: 'addr', _r: rank(a) * 100 + i })).sort((a, b) => a._r - b._r);
-      hits = [...stops.slice(0, addr.length ? 3 : 4), ...addr].slice(0, 7); render();
+      const near = (typeof U !== 'undefined' && U.origin) ? '&near=' + U.origin.lat + ',' + U.origin.lon : '';
+      const r = await fetch('/api/geocode?q=' + encodeURIComponent(q) + near).then(r => r.json()); if (my !== seq) return hits;
+      // On remonte les lieux de la commune tapée, puis ceux proches du réseau (les 4 lignes) et du point actuel.
+      const nq = norm(q), pl = nbPlaces(), o = (typeof U !== 'undefined' && U.origin) ? [U.origin.lat, U.origin.lon] : null;
+      const rank = a => (a.city && nq.includes(norm(a.city)) ? 0 : 2) + (pl.some(p => Math.abs(p.lat - a.lat) < .03 && haversine([p.lat, p.lon], [a.lat, a.lon]) < 2000) ? 0 : 1) + (o && haversine(o, [a.lat, a.lon]) < 4000 ? 0 : 0.5);
+      const addr = (r.results || []).filter(a => !stops.some(s => haversine([s.lat, s.lon], [a.lat, a.lon]) < 60)).map((a, i) => ({ ...a, kind: a.kind || 'place', _r: rank(a) * 100 + i })).sort((a, b) => a._r - b._r);
+      hits = [...stops.slice(0, addr.length ? 3 : 4), ...addr].slice(0, 8); render();
       if (!hits.length) box.innerHTML = '<div class="result muted">Aucun résultat</div>';
-    } catch (e) { if (!hits.length) box.innerHTML = '<div class="result muted">Recherche d\'adresse indisponible</div>'; }
+    } catch (e) { if (!hits.length) box.innerHTML = '<div class="result muted">Recherche indisponible</div>'; }
     return hits;
   };
-  input.addEventListener('input', () => { clearTimeout(tmr); const q = input.value.trim(); if (!q) { hits = []; render(); return; } tmr = setTimeout(() => run(q), 220); });
+  input.addEventListener('input', () => { clearTimeout(tmr); const q = input.value.trim(); if (!q) { hits = []; render(); return; } tmr = setTimeout(() => run(q), 280); });
   input.addEventListener('keydown', e => {
     if (e.key === 'ArrowDown') { sel = Math.min(hits.length - 1, sel + 1); render(); e.preventDefault(); }
     else if (e.key === 'ArrowUp') { sel = Math.max(0, sel - 1); render(); e.preventDefault(); }

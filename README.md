@@ -6,9 +6,9 @@ Site (FR), un seul écran : le site demande ta position et affiche tout de suite
 - `public/index.html` + `public/onde.js` + `public/onde.css`, moteur commun dans `public/core.js` (horaires, temps réel, marche, verdicts, itinéraire), partagé avec `/lignes.html`.
 - Carte MapLibre GL 5 (vendorisée dans `public/vendor/maplibre/`, UMD), fond OpenFreeMap « liberty » (clair) / « dark » (sombre), bouton satellite (Esri World Imagery + noms de rues). Rotation et inclinaison désactivées.
 - Chaque arrêt porte des pastilles colorées de ses lignes (images dessinées en canvas, couche symbole avec détection de collision : points dès z12, pastilles dès z13,4, noms dès z15,6 ; les arrêts proches passent en priorité). Toucher un arrêt → prochains bus par ligne et par direction.
-- Position en point bleu, bus en circulation interpolés le long du tracé avec halo « sonar ».
-- Géolocalisation acceptée → arrêts à moins de 800 m (élargi à 1,5 puis 2,5 km si rien), meilleure option par ligne et direction (« vers <terminus> »), minutes Live/Prévu, bus suivants, temps de marche et verdict ; toucher une ligne → arrêt, départs suivants, « fin ». Refusée/indisponible → un seul champ adresse.
-- « Où vas-tu ? » (BAN + arrêts) → lignes possibles : montée, descente, prochain départ + verdict, durée ; sinon « aucune des 4 lignes ne t'y emmène ».
+- Rond fixe au centre de la carte : déplacer ou zoomer la carte choisit le nouvel endroit (liste recalculée), pastille bleue + cercle de précision pour le GPS réel. Recentrage sur le GPS (ou la dernière adresse). Bus en circulation interpolés le long du tracé avec halo « sonar ».
+- Au chargement : GPS, sinon dernière position, sinon le secteur Rueil / Suresnes. Arrêts à moins de 800 m (élargi à 1,5 puis 2,5 km si rien), meilleure option par ligne et direction (« vers <terminus> »), minutes Live/Prévu, bus suivants, temps de marche et verdict ; toucher une ligne → arrêt, départs suivants, « fin ». On peut aussi taper un lieu via « changer ».
+- « Où vas-tu ? » (arrêts des 4 lignes + lieux OpenStreetMap via Photon/Nominatim et adresses BAN : commerces, écoles, gares, parcs, adresses…) → itinéraire parmi les 4 lignes depuis le point au centre : montée, descente, prochain départ + verdict, durée ; sinon « aucune des 4 lignes ne t'y emmène ».
 - Mobile : carte en haut (~46 % de l'écran) + feuille. Bureau (≥ 900 px) : panneau à gauche + carte. Thème clair/sombre mémorisé.
 - Anciennes URL `#/ligne/…`, `#/arret`, `#/monbus` redirigées vers `/lignes.html`.
 
@@ -35,7 +35,7 @@ Adresse (BAN) ou « Me localiser » : carte des arrêts des 4 lignes à moins de
 ## API locale
 - `GET /api/status` — clé présente ?, budget consommé, état des données GTFS (`gtfs.source` = `commit` ou `live`).
 - `GET /api/rt/144` — courses temps réel normalisées (ou `mode: "theorique"`).
-- `GET /api/geocode?q=…` / `?lat=&lon=` — proxy BAN (cache 6 h).
+- `GET /api/geocode?q=…[&near=lat,lon]` / `?lat=&lon=` — lieux OSM (Photon, repli Nominatim) + adresses BAN (cache 6 h).
 - `GET /api/walk?from=lat,lon&to=lat,lon` — itinéraire piéton OSRM (distance, durée, tracé).
 
 ## Déploiement Vercel (Hobby, gratuit)

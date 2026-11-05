@@ -18,9 +18,10 @@ const U = {
   dataReady: false, origin: null, geo: 'pending', ask: false, watch: null,
   near: [], places: [], R: 800, sel: null, stop: null,
   dest: null, plan: null, opt: 0, planKey: null,
-  gps: null, dragging: false, pinPend: null,
+  gps: null, followGps: true, camLock: false, pinPend: null,
   map: null, styleReady: false, sat: localStorage.getItem('onde-sat') === '1', styles: {},
 };
+const HOME = { lat: 48.874, lon: 2.205, label: 'Rueil — Suresnes', src: 'home' };
 const isDark = () => document.documentElement.dataset.theme === 'dark';
 const panel = $('#panel');
 
@@ -50,26 +51,29 @@ function onPos(p) {
   U.geo = 'ok';
   const o = { lat: +p.coords.latitude.toFixed(6), lon: +p.coords.longitude.toFixed(6), label: 'Ma position', src: 'gps', acc: Math.round(p.coords.accuracy || 0) };
   setGps(o);
-  // le rond suit le GPS sauf si l'utilisateur l'a déplacé (ou a tapé une adresse) entre-temps
-  if (U.forceGps || !U.origin || U.origin.src === 'gps') { U.forceGps = false; setOrigin({ ...o }, true); reverseLabel(U.origin); } else syncMap();
+  // le rond (centre de la carte) suit le GPS tant qu'on n'a pas déplacé la carte à la main
+  if (U.forceGps || U.followGps) {
+    U.forceGps = false; U.followGps = true;
+    setOrigin({ ...o }, true); reverseLabel(U.origin);
+  } else syncMap();
   if (U.watch == null && navigator.geolocation.watchPosition) U.watch = navigator.geolocation.watchPosition(q => {
-    const n = { lat: +q.coords.latitude.toFixed(6), lon: +q.coords.longitude.toFixed(6), label: 'Ma position', src: 'gps' };
+    const n = { lat: +q.coords.latitude.toFixed(6), lon: +q.coords.longitude.toFixed(6), label: 'Ma position', src: 'gps', acc: Math.round(q.coords.accuracy || 0) };
     const moved = !U.gps || haversine([n.lat, n.lon], [U.gps.lat, U.gps.lon]) > 80; setGps(n);
-    if (moved && U.origin && U.origin.src === 'gps' && !U.dragging) { const o2 = { ...n }; setOrigin(o2, false); reverseLabel(o2); } else syncMap();
+    if (moved && U.followGps) { const o2 = { ...n }; setOrigin(o2, true); reverseLabel(o2); } else syncMap();
   }, () => { }, { enableHighAccuracy: true, maximumAge: 20000 });
 }
-function setGps(o) { U.gps = { lat: o.lat, lon: o.lon, label: 'Ma position', src: 'gps' }; mbSet('onde-lastpos', { lat: o.lat, lon: o.lon, t: Date.now() }); }
+function setGps(o) { U.gps = { lat: o.lat, lon: o.lon, label: 'Ma position', src: 'gps', acc: o.acc || U.gps?.acc || 0 }; mbSet('onde-lastpos', { lat: o.lat, lon: o.lon, t: Date.now() }); }
 function onPosErr(e) { U.geo = e && e.code === 1 ? 'denied' : 'unavailable'; U.forceGps = false; if (!U.origin) U.ask = true; render(); }
 async function reverseLabel(o) {
   try { const r = await fetch(`/api/geocode?lat=${o.lat}&lon=${o.lon}`).then(r => r.json()); const a = r.results?.[0]; if (a && U.origin === o) { o.label = a.label.replace(/\s\d{5}\s/, ', '); render(); } } catch (e) { }
 }
-function setOrigin(o, fly, quick) { // quick = pendant qu'on fait glisser le rond : pas d'appels de marche (OSRM)
+function setOrigin(o, fly, quick) { // quick = pendant un déplacement de carte : pas d'appels de marche (OSRM)
   U.origin = o; U.ask = false; U.sel = null; U.stop = null;
   if (o.src === 'addr') mbSet('onde-addr', { label: o.label, lat: o.lat, lon: o.lon });
   if (!U.dataReady) return render();
   computeNear(quick); if (U.dest) computePlan(quick);
   render(); syncMap();
-  if (fly) { if (U.dest && U.plan) fitOpt(); else fitNear(); }
+  if (fly) flyTo(o);
 }
 
 /* ================= bus proches ================= */
@@ -126,13 +130,13 @@ function rowHTML(g, now) {
     </button>${more}</div>`;
 }
 function nearHTML(now) {
-  const O = U.origin, pin = O.src === 'pin';
+  const O = U.origin, pin = O.src === 'pin' || O.src === 'home';
   const where = O.src === 'gps' ? (O.stale ? 'Ta dernière position' : O.label === 'Ma position' ? 'Autour de ta position' : 'Près de ' + esc(O.label)) : pin ? (O.label === 'Point choisi' ? 'Autour du point choisi' : 'Près de ' + esc(O.label)) : esc(O.label);
   const back = O.src !== 'gps' && U.gps ? ` · <button type="button" class="link" data-act="regps">me recentrer</button>` : '';
-  const head = `<div class="sec-h"><div><h1>${pin ? 'Bus autour du point' : 'Bus autour de toi'}</h1><p class="${back ? 'two' : ''}">${I.pin}<span class="where">${where}</span><span class="acts">${back ? '' : '· '}<button type="button" class="link" data-act="ask">changer</button>${back}</span></p></div>${liveChip(U.near.map(g => g.short))}</div>`;
-  if (!U.near.length) return head + `<div class="empty"><b>Aucun arrêt des lignes 144, 160, 244 ou 360 à moins de ${fmtDist(U.R)}.</b><p>Fais glisser le rond près d'une ligne sur la carte, tape une autre adresse avec « changer », ou cherche ta destination ci-dessus.</p></div>`;
+  const head = `<div class="sec-h"><div><h1>${O.src === 'gps' ? 'Bus autour de toi' : 'Bus autour du point'}</h1><p class="${back ? 'two' : ''}">${I.pin}<span class="where">${where}</span><span class="acts">${back ? '' : '· '}<button type="button" class="link" data-act="ask">changer</button>${back}</span></p></div>${liveChip(U.near.map(g => g.short))}</div>`;
+  if (!U.near.length) return head + `<div class="empty"><b>Aucun arrêt des lignes 144, 160, 244 ou 360 à moins de ${fmtDist(U.R)}.</b><p>Déplace la carte près d'une ligne, tape un lieu avec « changer », ou cherche ta destination ci-dessus.</p></div>`;
   return head + `<div class="list">${nearGroups().map(gr => `<div class="grp" style="--c:${S.meta[gr.short].color}">${gr.rows.map(g => rowHTML(g, now)).join('')}</div>`).join('')}</div>
-    <p class="hint">${U.places.length} arrêt${U.places.length > 1 ? 's' : ''} à moins de ${fmtDist(U.R)} · fais glisser le rond pour voir ailleurs.</p>`;
+    <p class="hint">${U.places.length} arrêt${U.places.length > 1 ? 's' : ''} à moins de ${fmtDist(U.R)} · déplace la carte pour voir ailleurs.</p>`;
 }
 function liveChip(shorts) {
   const live = [...new Set(shorts)].some(isLive);
@@ -155,9 +159,8 @@ function stopHTML(now) {
       return `<div class="srow"><div class="srow-h">${lb(g.short)}<b class="to">vers ${esc(headOf(g.short, g.dir))}</b>${v ? vPill(v, true) : ''}</div>
         <div class="srow-d">${g.deps.map(d => `<span class="sd ${d.rt ? 'rt' : ''}"><b>${shortWhen(d, now)}</b><small>${fmtHM(d.t)}${d.rt ? ' · Live' : ' · Prévu'}</small>${fin(d)}</span>`).join('')}</div></div>`; }).join('') || '<div class="empty"><b>Plus de bus prévu à cet arrêt pour l\'instant.</b></div>'}</div>`;
 }
-function openStop(p, fly) {
+function openStop(p) {
   U.stop = { ...p, walk: null }; U.sel = null; render(); syncMap();
-  if (fly && U.map) U.map.easeTo({ center: [p.lon, p.lat], zoom: Math.max(U.map.getZoom(), 16), duration: 600 });
   if (U.origin) walkRoute(U.origin, { lat: p.lat, lon: p.lon }).then(w => { if (U.stop && U.stop.key === p.key && U.stop.lat === p.lat) { U.stop.walk = w; render(); syncMap(); } });
   scrollPanelTop();
 }
@@ -168,7 +171,7 @@ async function computePlan(quick) {
   const O = U.origin, D = U.dest, key = [O.lat, O.lon, D.lat, D.lon].join(); U.planKey = key;
   const direct = haversine([O.lat, O.lon], [D.lat, D.lon]);
   U.plan = { opts: nbPlan(O, D).slice(0, 4), direct, walkDirect: direct <= 2500 ? { duration: direct * 1.3 / MB.SPEED, distance: direct * 1.3, source: 'approx' } : null, loading: true };
-  U.opt = 0; reorder(); render(); syncMap(); if (quick) return; fitOpt();
+  U.opt = 0; reorder(); render(); syncMap(); if (quick) return;
   const jobs = [];
   for (const op of U.plan.opts) {
     jobs.push(walkRoute(O, op.a.s).then(w => { op.walkA = w; }));
@@ -176,7 +179,7 @@ async function computePlan(quick) {
   }
   if (U.plan.walkDirect) jobs.push(walkRoute(O, { lat: D.lat, lon: D.lon }).then(w => { if (U.plan) U.plan.walkDirect = w; }));
   await Promise.all(jobs); if (U.planKey !== key || !U.plan) return;
-  U.plan.loading = false; reorder(); U.opt = 0; render(); syncMap(); fitOpt();
+  U.plan.loading = false; reorder(); U.opt = 0; render(); syncMap();
   [...new Set(U.plan.opts.map(o => o.short))].forEach(pollRT);
 }
 function evalOpt(op, now) {
@@ -192,7 +195,7 @@ function reorder() {
 }
 function destHTML(now) {
   const P = U.plan, D = U.dest;
-  const head = `<div class="sec-h"><button class="back" type="button" data-act="cleardest" aria-label="Retour aux bus proches">${I.back}</button><div><h1>Vers ${esc(D.label)}</h1><p>${I.pin}<span class="where">Depuis ${U.origin.src === 'gps' ? 'ta position' : esc(U.origin.label)}</span></p></div></div>`;
+  const head = `<div class="sec-h"><button class="back" type="button" data-act="cleardest" aria-label="Retour aux bus proches">${I.back}</button><div><h1>Vers ${esc(D.label)}</h1><p>${I.pin}<span class="where">Depuis ${U.origin.src === 'gps' ? 'ta position' : U.origin.src === 'pin' ? 'le point sur la carte' : esc(U.origin.label)}</span></p></div></div>`;
   if (!P) return head;
   const wd = P.walkDirect;
   const walkOnly = wd ? `<div class="walkonly">${I.walk}<span><b>${fmtDur(wd.duration)} à pied</b> en marchant directement (${fmtDist(wd.distance)}${wd.source === 'approx' ? ', estimé' : ''})</span></div>` : '';
@@ -218,10 +221,11 @@ function optHTML(op, i, now) {
     </ol>${slow ? `<p class="opt-warn">${I.walk}Aussi rapide à pied (${fmtDur(U.plan.walkDirect.duration)}).</p>` : ''}</div>`;
 }
 function fitOpt() {
-  const op = U.plan?.opts[U.opt]; if (!U.origin || !U.dest) return;
-  const pts = [[U.origin.lat, U.origin.lon], [U.dest.lat, U.dest.lon]];
-  if (op) pts.push([op.a.s.lat, op.a.s.lon], [op.b.s.lat, op.b.s.lon], ...(op.walkA.path || []), ...(op.walkB.path || []));
-  fitPts(pts, 16.5);
+  if (!U.origin || !U.dest || !U.map) return;
+  const pts = [[U.dest.lat, U.dest.lon]];
+  const op = U.plan?.opts[U.opt];
+  if (op) pts.push([op.a.s.lat, op.a.s.lon], [op.b.s.lat, op.b.s.lon]);
+  flyTo(U.origin, { zoom: zoomToInclude(U.origin, pts, 16.4) });
 }
 
 /* ================= adresse (repli sans géolocalisation) ================= */
@@ -230,8 +234,8 @@ function askHTML() {
   const why = U.geo === 'denied' ? 'La localisation est refusée.' : U.geo === 'unavailable' ? 'Position introuvable.' : '';
   return `<div class="ask">
     ${U.origin ? `<button class="back" type="button" data-act="unask" aria-label="Retour">${I.back}</button>` : ''}
-    <h1>Où es-tu&nbsp;?</h1><p>${why} Tape ton adresse pour voir les bus autour de toi.</p>
-    <div class="field"><label class="search-in">${I.pin}<input id="addr" type="search" inputmode="search" enterkeyhint="search" autocomplete="street-address" placeholder="Ex. 12 rue de Verdun, Suresnes" aria-label="Ton adresse"></label><div class="results" id="addrRes" role="listbox"></div></div>
+    <h1>Où es-tu&nbsp;?</h1><p>${why} Tape une adresse, un commerce, une gare, une école, un parc…</p>
+    <div class="field"><label class="search-in">${I.pin}<input id="addr" type="search" inputmode="search" enterkeyhint="search" autocomplete="street-address" placeholder="Adresse, commerce, gare, parc…" aria-label="Ton adresse ou un lieu"></label><div class="results" id="addrRes" role="listbox"></div></div>
     ${last && (!U.origin || U.origin.label !== last.label) ? `<button type="button" class="link" data-act="last">${I.pin}${esc(last.label)}</button>` : ''}
     ${U.geo !== 'denied' && U.origin?.src !== 'gps' && 'geolocation' in navigator && U.origin ? `<button type="button" class="link" data-act="geo">${I.gps}Utiliser ma position</button>` : ''}
   </div>`;
@@ -248,7 +252,7 @@ function render() {
   $('#searchBox').hidden = !(m === 'near' || m === 'dest' || m === 'stop');
   $('#app').dataset.mode = m;
   if (m === 'ask') { // champ d'adresse : rendu une seule fois (on ne l'écrase pas pendant la saisie)
-    if (lastSig !== 'ask') { panel.innerHTML = askHTML(); lastSig = 'ask'; lastHTML = ''; const inp = $('#addr'); nbSearch(inp, $('#addrRes'), h => setOrigin({ label: h.label, lat: h.lat, lon: h.lon, src: 'addr' }, true)); if (matchMedia('(min-width: 900px)').matches || U.geo !== 'pending') setTimeout(() => inp.focus({ preventScroll: true }), 60); }
+    if (lastSig !== 'ask') { panel.innerHTML = askHTML(); lastSig = 'ask'; lastHTML = ''; const inp = $('#addr'); nbSearch(inp, $('#addrRes'), h => { U.followGps = false; setOrigin({ label: h.label, lat: h.lat, lon: h.lon, src: 'addr' }, true); }); if (matchMedia('(min-width: 900px)').matches || U.geo !== 'pending') setTimeout(() => inp.focus({ preventScroll: true }), 60); }
     return;
   }
   const h = m === 'loading' ? '<div class="ask pending"><div class="pulse"><i></i><i></i></div><p>Chargement des horaires…</p></div>' : m === 'pending' ? pendingHTML() : m === 'stop' ? stopHTML(now) : m === 'dest' ? destHTML(now) : nearHTML(now);
@@ -278,7 +282,7 @@ const qSearch = nbSearch(qIn, $('#qRes'), d => setDest(d));
 qIn.addEventListener('input', () => { $('#qClear').hidden = !qIn.value; });
 qIn.addEventListener('focus', () => { if (U.dest) qIn.select(); if (innerWidth < 900) setTimeout(() => $('#sheet').scrollTo({ top: 0 }), 50); });
 $('#qClear').onclick = () => { qIn.value = ''; $('#qClear').hidden = true; $('#qRes').innerHTML = ''; if (U.dest) clearDest(); else qIn.focus(); };
-function setDest(d) { U.dest = d; U.stop = null; U.sel = null; qIn.value = d.label; $('#qClear').hidden = false; computePlan(); scrollPanelTop(); }
+function setDest(d) { U.dest = d; U.stop = null; U.sel = null; qIn.value = d.label; $('#qClear').hidden = false; computePlan().then(() => fitOpt()); scrollPanelTop(); }
 function clearDest() { U.dest = null; U.plan = null; qIn.value = ''; $('#qClear').hidden = true; render(); syncMap(); fitNear(); }
 
 /* ================= carte (MapLibre GL + OpenFreeMap) ================= */
@@ -306,8 +310,9 @@ async function initMap() {
   let style; try { style = await styleFor(); } catch (e) { return mapFail('Fond de carte indisponible (hors ligne ?).'); }
   let map;
   try {
+    const cam = startCam();
     map = U.map = new maplibregl.Map({
-      container: 'map', style, center: [2.215, 48.875], zoom: 12, minZoom: 9.5, maxZoom: 19.5,
+      container: 'map', style, center: cam.center, zoom: cam.zoom, minZoom: 9.5, maxZoom: 19.5,
       dragRotate: false, pitchWithRotate: false, touchPitch: false, maxPitch: 0, renderWorldCopies: false,
       attributionControl: { compact: true }, fadeDuration: 150, maxBounds: [[1.6, 48.55], [2.85, 49.15]],
     });
@@ -317,8 +322,12 @@ async function initMap() {
   map.on('error', ev => { if (ev && ev.error && /webgl/i.test(String(ev.error.message))) mapFail('Carte indisponible (WebGL).'); });
   map.on('style.load', () => { U.styleReady = true; addOverlays(); });
   map.on('styleimagemissing', () => { });
-  bindMapEvents(map); bindLongPress(map);
+  bindMapEvents(map);
   busLoop();
+}
+function startCam() {
+  const o = U.origin || HOME;
+  return { center: [o.lon, o.lat], zoom: o.src === 'home' ? 14.4 : 15.2 };
 }
 function mapFail(msg) { const m = $('#mapMsg'); m.hidden = false; m.textContent = msg; }
 const ll = p => [p[1], p[0]];
@@ -330,8 +339,36 @@ function fitPts(pts, maxZoom = 16.5) {
   if (c.clientHeight < pad.top + pad.bottom + 40) { pad.top = 20; pad.bottom = 10; }
   map.fitBounds([[w, s], [e, n]], { padding: pad, maxZoom, duration: 700 });
 }
-function fitNear() { if (!U.origin) return fitAll(); fitPts([[U.origin.lat, U.origin.lon], ...U.near.slice(0, 6).map(g => [g.s.lat, g.s.lon])], 16.25); }
-function fitSel() { const g = U.near.find(g => g.key === U.sel); if (g && U.origin) fitPts([[U.origin.lat, U.origin.lon], [g.s.lat, g.s.lon], ...(g.walk.path || [])], 17); }
+function flyTo(o, opts = {}) {
+  if (!U.map || !o) return;
+  const cur = U.map.getZoom();
+  const zoom = opts.zoom != null ? opts.zoom : (cur < 14 ? 15.2 : cur);
+  U.camLock = true;
+  const dur = opts.duration != null ? opts.duration : 650;
+  if (!dur) U.map.jumpTo({ center: [o.lon, o.lat], zoom });
+  else U.map.easeTo({ center: [o.lon, o.lat], zoom, duration: dur });
+}
+function zoomToInclude(o, pts, maxZoom = 16.2) {
+  const map = U.map; if (!map || !window.maplibregl?.MercatorCoordinate) return Math.min(maxZoom, map.getZoom() || 15);
+  const c = map.getContainer(), W = c.clientWidth, H = c.clientHeight;
+  const padT = 70, padB = 48, padL = 36, padR = 56;
+  const cs = maplibregl.MercatorCoordinate.fromLngLat({ lon: o.lon, lat: o.lat });
+  let z = maxZoom;
+  for (const [lat, lon] of pts) {
+    const p = maplibregl.MercatorCoordinate.fromLngLat({ lon, lat });
+    const dx = (p.x - cs.x) * 512, dy = (p.y - cs.y) * 512;
+    const availX = (dx >= 0 ? W / 2 - padR : W / 2 - padL);
+    const availY = (dy >= 0 ? H / 2 - padB : H / 2 - padT);
+    if (Math.abs(dx) > 1e-12 && availX > 8) z = Math.min(z, Math.log2(availX / (Math.abs(dx) * 512)));
+    if (Math.abs(dy) > 1e-12 && availY > 8) z = Math.min(z, Math.log2(availY / (Math.abs(dy) * 512)));
+  }
+  return Math.max(11.2, Math.min(maxZoom, z));
+}
+function fitNear() { if (U.origin) flyTo(U.origin, { zoom: U.map && U.map.getZoom() < 14 ? 15.2 : undefined }); }
+function fitSel() {
+  const g = U.near.find(g => g.key === U.sel);
+  if (g && U.origin && U.map) flyTo(U.origin, { zoom: zoomToInclude(U.origin, [[g.s.lat, g.s.lon]], 17) });
+}
 function fitAll() { const pts = []; for (const l of S.lines) for (const M of S.data[l.short].main) pts.push(M.shape[0], M.shape.at(-1)); fitPts(pts, 13); }
 
 const BADGE = { w: 27, h: 16, gap: 3, pad: 3, m: 2 };
@@ -365,7 +402,10 @@ function addOverlays() {
   map.addSource('walk', { type: 'geojson', data: EMPTY });
   map.addSource('stops', { type: 'geojson', data: stopsGeo() });
   map.addSource('marks', { type: 'geojson', data: EMPTY });
+  map.addSource('gpsacc', { type: 'geojson', data: EMPTY });
   const W = (a, b, c) => ['interpolate', ['linear'], ['zoom'], 11, a, 15, b, 18, c];
+  map.addLayer({ id: 'gpsacc', type: 'fill', source: 'gpsacc', paint: { 'fill-color': '#1a73e8', 'fill-opacity': 0.14 } });
+  map.addLayer({ id: 'gpsacc-ol', type: 'line', source: 'gpsacc', paint: { 'line-color': '#1a73e8', 'line-opacity': 0.35, 'line-width': 1 } });
   map.addLayer({ id: 'lines-case', type: 'line', source: 'lines', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': dark ? '#0b0e14' : '#ffffff', 'line-width': W(3.5, 7, 11), 'line-opacity': U.sat ? .5 : .9 } });
   map.addLayer({ id: 'lines', type: 'line', source: 'lines', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['get', 'color'], 'line-width': W(1.8, 4, 6.5), 'line-opacity': .85 } });
   map.addLayer({ id: 'focus-case', type: 'line', source: 'focus', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': dark ? '#0b0e14' : '#ffffff', 'line-width': W(6, 10, 15) } });
@@ -385,27 +425,47 @@ function addOverlays() {
   map.addLayer({ id: 'marks', type: 'circle', source: 'marks', paint: { 'circle-radius': 7, 'circle-color': '#ffffff', 'circle-stroke-color': ['get', 'color'], 'circle-stroke-width': 4 } });
   map.addLayer({ id: 'marks-lbl', type: 'symbol', source: 'marks', layout: { 'text-field': ['get', 'label'], 'text-font': ['Noto Sans Bold'], 'text-size': 12, 'text-anchor': 'top', 'text-offset': [0, 0.9], 'text-allow-overlap': true }, paint: { 'text-color': dark ? '#ffffff' : '#202124', 'text-halo-color': dark ? '#0b0e14' : '#ffffff', 'text-halo-width': 2 } });
   syncMap(true);
-  if (!U.camDone) { U.camDone = true; if (U.origin) (U.dest ? fitOpt : fitNear)(); else fitAll(); }
 }
 function bindMapEvents(map) {
   const pick = e => {
     const f = map.queryRenderedFeatures(e.point, { layers: ['stops-hit', 'stops-lbl'] })[0]; if (!f) return false;
-    const p = nbPlaces()[f.properties.i]; if (p) openStop(p, false); return true;
+    const p = nbPlaces()[f.properties.i]; if (p) openStop(p); return true;
   };
   map.on('click', e => { pick(e); });
   map.on('mousemove', e => { if (!map.getLayer('stops-hit')) return; const f = map.queryRenderedFeatures(e.point, { layers: ['stops-hit', 'stops-lbl'] }); map.getCanvas().style.cursor = f.length ? 'pointer' : ''; });
+  map.on('movestart', e => {
+    if (e.originalEvent) { U.followGps = false; map.getContainer().parentElement.classList.add('moving'); }
+  });
+  map.on('move', () => { if (!U.camLock) schedulePin(false); });
+  map.on('moveend', () => {
+    map.getContainer().parentElement.classList.remove('moving');
+    U.camLock = false;
+    schedulePin(true);
+  });
 }
-let meMk = null, destMk = null, gpsMk = null;
+let destMk = null, gpsMk = null;
+function circleFC(lat, lon, r, n = 64) {
+  const coords = [];
+  const latR = r / 111320, lonR = r / (111320 * Math.cos(lat * Math.PI / 180) || 1);
+  for (let i = 0; i <= n; i++) { const a = (i / n) * 2 * Math.PI; coords.push([lon + lonR * Math.sin(a), lat + latR * Math.cos(a)]); }
+  return { type: 'FeatureCollection', features: [{ type: 'Feature', geometry: { type: 'Polygon', coordinates: [coords] }, properties: {} }] };
+}
 function syncMap() {
   const map = U.map; if (!map || !U.styleReady || !map.getSource('stops')) return;
-  // le rond : position de départ, qu'on peut faire glisser
-  if (U.origin) {
-    if (!meMk) meMk = makePin(map);
-    if (!U.dragging) meMk.setLngLat([U.origin.lon, U.origin.lat]);
-    const el = meMk.getElement(); el.classList.toggle('addr', U.origin.src === 'addr'); el.classList.toggle('pin', U.origin.src === 'pin');
+  const pin = $('#mePin');
+  if (pin && U.origin) {
+    pin.classList.toggle('addr', U.origin.src === 'addr');
+    pin.classList.toggle('pin', U.origin.src === 'pin' || U.origin.src === 'home');
+    pin.classList.toggle('gps', U.origin.src === 'gps');
   }
-  // position GPS réelle (petit point discret) quand le rond est ailleurs
-  if (U.gps && U.origin && U.origin.src !== 'gps') {
+  const me = $('#btnMe'); if (me) me.classList.toggle('on', !!(U.followGps && U.gps));
+  // cercle de précision GPS + pastille bleue quand le centre n'est plus sur soi
+  if (map.getSource('gpsacc')) {
+    const acc = U.gps ? Math.min(Math.max(U.gps.acc || 0, 18), 250) : 0;
+    map.getSource('gpsacc').setData(U.gps && acc ? circleFC(U.gps.lat, U.gps.lon, acc) : EMPTY);
+  }
+  const away = U.gps && (!U.origin || U.origin.src !== 'gps' || haversine([U.origin.lat, U.origin.lon], [U.gps.lat, U.gps.lon]) > 22);
+  if (away) {
     if (!gpsMk) { const el = document.createElement('div'); el.className = 'gps-dot'; el.title = 'Ta position réelle'; gpsMk = new maplibregl.Marker({ element: el }).setLngLat([U.gps.lon, U.gps.lat]).addTo(map); el.addEventListener('click', e => { e.stopPropagation(); regps(); }); }
     gpsMk.setLngLat([U.gps.lon, U.gps.lat]);
   } else if (gpsMk) { gpsMk.remove(); gpsMk = null; }
@@ -439,62 +499,39 @@ function syncMap() {
   map.setPaintProperty('lines-case', 'line-opacity', dim ? .35 : (U.sat ? .5 : .9));
   U.focusLines = !U.stop && U.dest && U.plan?.opts[U.opt] ? new Set([U.plan.opts[U.opt].short + '|' + U.plan.opts[U.opt].dir]) : !U.stop && U.sel ? new Set([U.sel]) : null;
 }
-/* ----- le rond déplaçable : glisser (ou appui long sur la carte) = « comme si j'étais là » ----- */
-function makePin(map) {
-  const el = document.createElement('div'); el.className = 'me'; el.innerHTML = '<i></i><b></b>';
-  el.title = 'Fais glisser le rond pour voir les bus ailleurs'; el.setAttribute('aria-label', el.title);
-  const mk = new maplibregl.Marker({ element: el, draggable: true }).setLngLat([U.origin.lon, U.origin.lat]).addTo(map);
-  mk.on('dragstart', () => { U.dragging = true; el.classList.add('drag'); });
-  mk.on('drag', () => { U.dragPt = map.project(mk.getLngLat()); edgePan(map, mk); const l = mk.getLngLat(); pinMove(l.lat, l.lng); });
-  mk.on('dragend', () => { U.dragging = false; U.dragPt = null; el.classList.remove('drag'); const l = mk.getLngLat(); pinMove(l.lat, l.lng, true); });
-  el.addEventListener('click', e => e.stopPropagation());
-  // relâché hors de la carte (ou fenêtre quittée) : on termine proprement le glissé
-  const endOut = () => setTimeout(() => { if (U.dragging) { if (mk._onUp) mk._onUp(); if (U.dragging) mk.fire('dragend'); } }, 0);
-  for (const ev of ['mouseup', 'touchend', 'touchcancel', 'blur']) window.addEventListener(ev, endOut);
-  return mk;
-}
-// la carte suit le rond quand on l'amène au bord
-function edgePan(map, mk) {
-  if (U.edgeRaf) return;
-  const step = () => {
-    U.edgeRaf = null; const p = U.dragPt; if (!U.dragging || !p) return;
-    const c = map.getContainer(), W = c.clientWidth, H = c.clientHeight, mx = 36, top = 64, bot = 56, sp = v => Math.max(-14, Math.min(14, v / 3));
-    const dx = p.x < mx ? sp(p.x - mx) : p.x > W - mx ? sp(p.x - W + mx) : 0, dy = p.y < top ? sp(p.y - top) : p.y > H - bot ? sp(p.y - H + bot) : 0;
-    if (!dx && !dy) return;
-    map.panBy([dx, dy], { duration: 0 }); mk.setLngLat(map.unproject(p));
-    const l = mk.getLngLat(); pinMove(l.lat, l.lng);
-    U.edgeRaf = requestAnimationFrame(step);
-  };
-  U.edgeRaf = requestAnimationFrame(step);
-}
-// recalcul : anti-rebond ~300 ms pendant le glissé (au plus toutes les 700 ms), immédiat au lâcher
+/* ----- le rond suit le centre de la carte : déplacer la carte = nouvel endroit ----- */
 let pinT = null, pinLast = 0;
-function pinMove(lat, lon, final) {
-  U.pinPend = { lat: +lat.toFixed(6), lon: +lon.toFixed(6), label: 'Point choisi', src: 'pin' };
+function schedulePin(final) {
+  const map = U.map; if (!map) return;
+  const c = map.getCenter();
+  U.pinPend = { lat: +c.lat.toFixed(6), lon: +c.lng.toFixed(6) };
   clearTimeout(pinT);
   if (final) return applyPin(true);
   if (performance.now() - pinLast > 700) applyPin(false); else pinT = setTimeout(() => applyPin(false), 300);
 }
 function applyPin(final) {
-  const o = U.pinPend; if (!o || !U.dataReady) return; U.pinPend = null; pinLast = performance.now();
-  if (final && U.gps && haversine([o.lat, o.lon], [U.gps.lat, U.gps.lon]) < 20) return regps(false); // reposé sur soi
+  const pend = U.pinPend; if (!pend || !U.dataReady) return;
+  if (final) U.pinPend = null;
+  pinLast = performance.now();
+  const { lat, lon } = pend;
+  if (U.origin && haversine([lat, lon], [U.origin.lat, U.origin.lon]) < 8) {
+    if (final && U.origin.src === 'pin' && U.origin.label === 'Point choisi') reverseLabel(U.origin);
+    return;
+  }
+  let o;
+  if (U.gps && haversine([lat, lon], [U.gps.lat, U.gps.lon]) < 25) o = { ...U.gps, src: 'gps' };
+  else if (U.origin && U.origin.src === 'addr' && haversine([lat, lon], [U.origin.lat, U.origin.lon]) < 15) o = { ...U.origin, lat, lon };
+  else {
+    const last = mbGet('onde-addr');
+    o = last && haversine([lat, lon], [last.lat, last.lon]) < 20 ? { ...last, src: 'addr' } : { lat, lon, label: 'Point choisi', src: 'pin' };
+  }
   setOrigin(o, false, !final);
-  if (!final) return;
-  reverseLabel(o);
-  if (!U.dest && U.map) U.map.easeTo({ center: [o.lon, o.lat], duration: 450 });
+  if (final && o.src === 'pin') reverseLabel(o);
 }
 function regps(fly = true) {
   if (!U.gps) return locate(true);
+  U.followGps = true;
   const o = { ...U.gps }; setOrigin(o, fly); reverseLabel(o);
-}
-function bindLongPress(map) { // appui long (mobile) ou clic droit (bureau) sur la carte : le rond saute là
-  let t = null, p0 = null, lpAt = 0;
-  const cancel = () => { clearTimeout(t); t = null; };
-  map.on('touchstart', e => { cancel(); const oe = e.originalEvent; if (oe.touches.length !== 1 || oe.target.closest?.('.me,.bus-wrap,.gps-dot')) return; p0 = e.point;
-    t = setTimeout(() => { t = null; lpAt = Date.now(); navigator.vibrate?.(12); const l = map.unproject(p0); pinMove(l.lat, l.lng, true); }, 550); });
-  map.on('touchmove', e => { if (t && (e.originalEvent.touches.length !== 1 || Math.hypot(e.point.x - p0.x, e.point.y - p0.y) > 8)) cancel(); });
-  map.on('touchend', cancel); map.on('touchcancel', cancel); map.on('zoomstart', cancel);
-  map.on('contextmenu', e => { if (Date.now() - lpAt < 1200) return; e.preventDefault?.(); pinMove(e.lngLat.lat, e.lngLat.lng, true); });
 }
 async function applyStyle() {
   if (!U.map) return; let s; try { s = await styleFor(); } catch (e) { return toast('Fond de carte indisponible'); }
@@ -539,9 +576,11 @@ function busLoop() {
 window.addEventListener('onde-rt', () => { for (const m of busMk.values()) m.remove(); busMk.clear(); render(); });
 
 /* ================= boutons carte ================= */
-$('#btnMe').onclick = () => { // « Me recentrer » : ramène le rond sur ma position GPS réelle
-  if (U.origin && U.origin.src !== 'gps') return U.gps ? regps() : locate(true);
-  if (U.origin) { if (U.dest && U.plan) fitOpt(); else if (U.sel) fitSel(); else fitNear(); } else locate(true);
+$('#btnMe').onclick = () => { // recentre la carte pour placer le GPS (ou la dernière adresse) sous le rond
+  if (U.gps) return regps(true);
+  const addr = mbGet('onde-addr');
+  if (addr) { U.followGps = false; return setOrigin({ ...addr, src: 'addr' }, true); }
+  locate(true);
 };
 $('#btnSat').onclick = () => { U.sat = !U.sat; localStorage.setItem('onde-sat', U.sat ? '1' : '0'); $('#btnSat').setAttribute('aria-pressed', U.sat); $('#btnSat').classList.toggle('on', U.sat); applyStyle(); };
 $('#btnSat').classList.toggle('on', U.sat); $('#btnSat').setAttribute('aria-pressed', U.sat);
@@ -555,8 +594,11 @@ $('#btnTheme').onclick = () => {
 async function boot() {
   const h = location.hash; const to = /[?&]to=([^&]+)/.exec(h);
   if (h) history.replaceState(null, '', location.pathname);
-  // affichage immédiat : dernière position connue (< 6 h), remplacée dès que le GPS répond
-  const lp = mbGet('onde-lastpos'); if (lp && Date.now() - lp.t < 6 * 3600e3 && 'geolocation' in navigator) U.origin = { lat: lp.lat, lon: lp.lon, label: 'Ma position', src: 'gps', stale: true };
+  // affichage immédiat : GPS mémorisé (< 6 h), sinon le secteur Rueil / Suresnes ; le GPS réel remplace dès qu'il répond
+  const lp = mbGet('onde-lastpos');
+  if (lp && Date.now() - lp.t < 6 * 3600e3 && 'geolocation' in navigator) U.origin = { lat: lp.lat, lon: lp.lon, label: 'Ma position', src: 'gps', stale: true };
+  else U.origin = { ...HOME };
+  U.followGps = true;
   locate(); // la demande de localisation part tout de suite, pendant le chargement des horaires
   if (window.maplibregl) initMap();
   try {
@@ -568,7 +610,7 @@ async function boot() {
   U.dataReady = true;
   fetch('/api/status').then(r => r.json()).then(s => { S.status = s; }).catch(() => { });
   S.lines.forEach(l => pollRT(l.short));
-  if (U.origin) setOrigin(U.origin, true); else render();
+  if (U.origin) setOrigin(U.origin, false); else render();
   addOverlays();
   if (to) { const q = decodeURIComponent(to[1]); qIn.value = q; const go = () => U.origin ? qSearch.run(q).then(hs => hs[0] && qSearch.pick(hs[0])) : setTimeout(go, 600); go(); }
   setInterval(() => { if (!document.hidden) render(); }, 5000);
