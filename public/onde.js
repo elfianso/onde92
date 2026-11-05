@@ -136,8 +136,8 @@ function nearHTML(now) {
   const O = U.origin, pin = O.src === 'pin' || O.src === 'home';
   const where = O.src === 'gps' ? (O.stale ? 'Ta dernière position' : O.label === 'Ma position' ? 'Autour de ta position' : 'Près de ' + esc(O.label)) : pin ? (O.label === 'Point choisi' ? 'Autour du point choisi' : 'Près de ' + esc(O.label)) : esc(O.label);
   const back = O.src !== 'gps' && U.gps ? ` · <button type="button" class="link" data-act="regps">me recentrer</button>` : '';
-  const head = `<div class="sec-h"><div><h1>${O.src === 'gps' ? 'Bus autour de toi' : 'Bus autour du point'}</h1><p class="${back ? 'two' : ''}">${I.pin}<span class="where">${where}</span><span class="acts">${back ? '' : '· '}<button type="button" class="link" data-act="ask">changer</button>${back}</span></p></div>${liveChip(U.near.map(g => g.short))}</div>`;
-  if (!U.near.length) return head + `<div class="empty"><b>Aucun arrêt des lignes 144, 160, 244 ou 360 à moins de ${fmtDist(U.R)}.</b><p>Déplace la carte près d'une ligne, tape un lieu avec « changer », ou cherche ta destination ci-dessus.</p></div>`;
+  const head = `<div class="sec-h"><div><h1>${O.src === 'gps' ? 'Bus autour de toi' : "Bus autour d'ici"}</h1><p class="${back ? 'two' : ''}">${I.pin}<span class="where">${where}</span><span class="acts">${back ? '' : '· '}<button type="button" class="link" data-act="ask">changer</button>${back}</span></p></div>${liveChip(U.near.map(g => g.short))}</div>`;
+  if (!U.near.length) return head + `<div class="empty"><b>Aucun de nos bus à moins de ${fmtDist(U.R)}.</b><p>Glisse la carte vers une ligne, ou cherche où tu vas juste au-dessus.</p></div>`;
   return head + `<div class="list">${nearGroups().map(gr => `<div class="grp" style="--c:${S.meta[gr.short].color}">${gr.rows.map(g => rowHTML(g, now)).join('')}</div>`).join('')}</div>
     <p class="hint">${U.places.length} arrêt${U.places.length > 1 ? 's' : ''} à moins de ${fmtDist(U.R)} · déplace la carte pour voir ailleurs.</p>`;
 }
@@ -215,7 +215,7 @@ function optHTML(op, i, now) {
   const missed = !f && ev.deps[0];
   return `<div class="opt ${on ? 'on' : ''}" data-opt="${i}" style="--c:${S.meta[op.short].color}" role="button" tabindex="0" aria-pressed="${on}">
     <div class="opt-h">${lb(op.short)}<b class="to">vers ${esc(headOf(op.short, op.dir))}</b>
-      <span class="opt-tot">${total != null ? `<b>${total} min</b><small>arrivée ${fmtHM(ev.arrive)}</small>` : '<b class="none">—</b><small>plus de bus</small>'}</span></div>
+      <span class="opt-tot">${total != null ? `<span class="tm"><b>${total}</b><small>min</small></span><small>arrivée ${fmtHM(ev.arrive)}</small>` : '<span class="tm none">—</span><small>plus de bus</small>'}</span></div>
     <ol class="steps">
       <li>${I.walk}<span><b>${fmtDur(op.walkA.duration)}</b> à pied jusqu'à <b>${esc(op.a.s.name)}</b></span></li>
       <li class="bus">${lb(op.short, 'xs')}<span>${f ? `Prochain départ <b>${shortWhen(f, now)}</b> (${fmtHM(f.t)}) ${src(f)}${fin(f)} ${vPill(f.v, true)}${after ? `<small>puis ${fmtHM(after.t)}${after.fin ? ' <em class="fin">fin</em>' : ''}</small>` : ''}` : missed ? `Dernier bus ${fmtHM(missed.t)} : ${vPill(missed.v)}` : 'Plus de départ prévu aujourd\'hui'}
@@ -244,7 +244,7 @@ function askHTML() {
   </div>`;
 }
 function pendingHTML() {
-  return `<div class="ask pending"><div class="pulse"><i></i><i></i>${I.gps}</div><h1>On te localise…</h1><p>Autorise la localisation pour voir tout de suite les bus autour de toi.</p><button type="button" class="link" data-act="ask">ou tape ton adresse</button></div>`;
+  return `<div class="ask pending"><div class="pulse"><i></i><i></i>${I.gps}</div><h1>On te localise…</h1><p>Autorise la position pour voir tout de suite les bus autour de toi.</p><button type="button" class="link" data-act="ask">ou tape ton adresse</button></div>`;
 }
 
 /* ================= rendu du panneau ================= */
@@ -374,16 +374,16 @@ function fitSel() {
 }
 function fitAll() { const pts = []; for (const l of S.lines) for (const M of S.data[l.short].main) pts.push(M.shape[0], M.shape.at(-1)); fitPts(pts, 13); }
 
-const BADGE = { w: 27, h: 16, gap: 3, pad: 3, m: 2 };
+const BADGE = { w: 30, h: 16, gap: 3, pad: 3, m: 2 };
 function badgeImage(lines) {
   const r = 2, { w, h, gap, pad, m } = BADGE, W = m * 2 + pad * 2 + lines.length * w + (lines.length - 1) * gap, H = m * 2 + pad * 2 + h;
   const cv = document.createElement('canvas'); cv.width = W * r; cv.height = H * r; const c = cv.getContext('2d'); c.scale(r, r);
   const rr = (x, y, ww, hh, rad) => { c.beginPath(); c.roundRect ? c.roundRect(x, y, ww, hh, rad) : c.rect(x, y, ww, hh); };
   c.shadowColor = 'rgba(0,0,0,.28)'; c.shadowBlur = 2.5; c.shadowOffsetY = .6;
-  rr(m, m, W - 2 * m, H - 2 * m, 6); c.fillStyle = isDark() && !U.sat ? '#232936' : '#ffffff'; c.fill();
+  rr(m, m, W - 2 * m, H - 2 * m, 8); c.fillStyle = isDark() && !U.sat ? '#1e2430' : '#ffffff'; c.fill();
   c.shadowColor = 'transparent';
-  c.font = '700 11px Inter, "Helvetica Neue", Arial, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
-  lines.forEach((s, i) => { const meta = S.meta[s], x = m + pad + i * (w + gap), y = m + pad; rr(x, y, w, h, 4); c.fillStyle = meta.color; c.fill(); c.fillStyle = meta.textColor; c.fillText(s, x + w / 2, y + h / 2 + .5); });
+  c.font = '800 11px Inter, "Helvetica Neue", Arial, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+  lines.forEach((s, i) => { const meta = S.meta[s], x = m + pad + i * (w + gap), y = m + pad; rr(x, y, w, h, h / 2); c.fillStyle = meta.color; c.fill(); c.fillStyle = meta.textColor; c.fillText(s, x + w / 2, y + h / 2 + .5); });
   return { img: c.getImageData(0, 0, W * r, H * r), r };
 }
 function stopsGeo() {
@@ -589,7 +589,7 @@ $('#btnSat').onclick = () => { U.sat = !U.sat; localStorage.setItem('onde-sat', 
 $('#btnSat').classList.toggle('on', U.sat); $('#btnSat').setAttribute('aria-pressed', U.sat);
 $('#btnTheme').onclick = () => {
   const t = isDark() ? 'light' : 'dark'; document.documentElement.dataset.theme = t; localStorage.setItem('onde-theme', t);
-  document.querySelector('meta[name=theme-color]').content = t === 'dark' ? '#0f1218' : '#ffffff';
+  document.querySelector('meta[name=theme-color]').content = t === 'dark' ? '#12151c' : '#f3f4f7';
   if (!U.sat) applyStyle(); else { U.styleReady = false; U.map && U.map.setStyle(U.styles.sat, { diff: false }); }
 };
 
