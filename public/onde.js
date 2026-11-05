@@ -18,7 +18,7 @@ const U = {
   dataReady: false, origin: null, geo: 'pending', ask: false, watch: null,
   near: [], places: [], R: 800, sel: null, stop: null,
   dest: null, plan: null, opt: 0, planKey: null,
-  gps: null, followGps: true, camLock: false, pinPend: null,
+  gps: null, followGps: true, camLock: false, pinPend: null, wantFly: false,
   map: null, styleReady: false, sat: localStorage.getItem('onde-sat') === '1', styles: {},
 };
 const HOME = { lat: 48.874, lon: 2.205, label: 'Rueil — Suresnes', src: 'home' };
@@ -70,10 +70,13 @@ async function reverseLabel(o) {
 function setOrigin(o, fly, quick) { // quick = pendant un déplacement de carte : pas d'appels de marche (OSRM)
   U.origin = o; U.ask = false; U.sel = null; U.stop = null;
   if (o.src === 'addr') mbSet('onde-addr', { label: o.label, lat: o.lat, lon: o.lon });
+  if (fly) U.wantFly = true;
   if (!U.dataReady) return render();
   computeNear(quick); if (U.dest) computePlan(quick);
   render(); syncMap();
-  if (fly) flyTo(o);
+  const shouldFly = !!(fly || (U.wantFly && U.followGps));
+  U.wantFly = false;
+  if (shouldFly) flyTo(o);
 }
 
 /* ================= bus proches ================= */
@@ -611,6 +614,7 @@ async function boot() {
   fetch('/api/status').then(r => r.json()).then(s => { S.status = s; }).catch(() => { });
   S.lines.forEach(l => pollRT(l.short));
   if (U.origin) setOrigin(U.origin, false); else render();
+  if (U.pinPend) applyPin(true);
   addOverlays();
   if (to) { const q = decodeURIComponent(to[1]); qIn.value = q; const go = () => U.origin ? qSearch.run(q).then(hs => hs[0] && qSearch.pick(hs[0])) : setTimeout(go, 600); go(); }
   setInterval(() => { if (!document.hidden) render(); }, 5000);
