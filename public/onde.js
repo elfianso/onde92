@@ -18,6 +18,7 @@ const U = {
   dataReady: false, origin: null, geo: 'pending', ask: false, watch: null,
   near: [], places: [], R: 800, sel: null, stop: null,
   dest: null, plan: null, opt: 0, planKey: null,
+  gps: null, dragging: false, pinPend: null,
   map: null, styleReady: false, sat: localStorage.getItem('onde-sat') === '1', styles: {},
 };
 const isDark = () => document.documentElement.dataset.theme === 'dark';
@@ -40,36 +41,39 @@ const lb = (short, cls = '') => { const m = S.meta[short]; return `<span class="
 const headOf = (short, dir) => S.data[short].main[dir].headsign;
 
 /* ================= géolocalisation ================= */
-function locate() {
+function locate(force) {
   if (!('geolocation' in navigator)) { U.geo = 'unavailable'; return render(); }
-  U.geo = 'pending'; U.ask = false; render();
+  U.geo = 'pending'; U.ask = false; U.forceGps = !!force; render();
   navigator.geolocation.getCurrentPosition(onPos, onPosErr, { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 });
 }
 function onPos(p) {
   U.geo = 'ok';
   const o = { lat: +p.coords.latitude.toFixed(6), lon: +p.coords.longitude.toFixed(6), label: 'Ma position', src: 'gps', acc: Math.round(p.coords.accuracy || 0) };
-  setOrigin(o, true); reverseLabel(o);
+  setGps(o);
+  // le rond suit le GPS sauf si l'utilisateur l'a déplacé (ou a tapé une adresse) entre-temps
+  if (U.forceGps || !U.origin || U.origin.src === 'gps') { U.forceGps = false; setOrigin({ ...o }, true); reverseLabel(U.origin); } else syncMap();
   if (U.watch == null && navigator.geolocation.watchPosition) U.watch = navigator.geolocation.watchPosition(q => {
-    if (!U.origin || U.origin.src !== 'gps') return;
-    const n = { lat: +q.coords.latitude.toFixed(6), lon: +q.coords.longitude.toFixed(6) };
-    if (haversine([n.lat, n.lon], [U.origin.lat, U.origin.lon]) > 80) { const o2 = { ...n, label: 'Ma position', src: 'gps' }; setOrigin(o2, false); reverseLabel(o2); }
+    const n = { lat: +q.coords.latitude.toFixed(6), lon: +q.coords.longitude.toFixed(6), label: 'Ma position', src: 'gps' };
+    const moved = !U.gps || haversine([n.lat, n.lon], [U.gps.lat, U.gps.lon]) > 80; setGps(n);
+    if (moved && U.origin && U.origin.src === 'gps' && !U.dragging) { const o2 = { ...n }; setOrigin(o2, false); reverseLabel(o2); } else syncMap();
   }, () => { }, { enableHighAccuracy: true, maximumAge: 20000 });
 }
-function onPosErr(e) { U.geo = e && e.code === 1 ? 'denied' : 'unavailable'; if (!U.origin) U.ask = true; render(); }
+function setGps(o) { U.gps = { lat: o.lat, lon: o.lon, label: 'Ma position', src: 'gps' }; mbSet('onde-lastpos', { lat: o.lat, lon: o.lon, t: Date.now() }); }
+function onPosErr(e) { U.geo = e && e.code === 1 ? 'denied' : 'unavailable'; U.forceGps = false; if (!U.origin) U.ask = true; render(); }
 async function reverseLabel(o) {
   try { const r = await fetch(`/api/geocode?lat=${o.lat}&lon=${o.lon}`).then(r => r.json()); const a = r.results?.[0]; if (a && U.origin === o) { o.label = a.label.replace(/\s\d{5}\s/, ', '); render(); } } catch (e) { }
 }
-function setOrigin(o, fly) {
+function setOrigin(o, fly, quick) { // quick = pendant qu'on fait glisser le rond : pas d'appels de marche (OSRM)
   U.origin = o; U.ask = false; U.sel = null; U.stop = null;
   if (o.src === 'addr') mbSet('onde-addr', { label: o.label, lat: o.lat, lon: o.lon });
   if (!U.dataReady) return render();
-  computeNear(); if (U.dest) computePlan();
+  computeNear(quick); if (U.dest) computePlan(quick);
   render(); syncMap();
   if (fly) { if (U.dest && U.plan) fitOpt(); else fitNear(); }
 }
 
 /* ================= bus proches ================= */
-function computeNear() {
+function computeNear(quick) {
   const O = U.origin, o = [O.lat, O.lon];
   const cand = nbQuays().map(q => ({ ...q, d: haversine(o, [q.s.lat, q.s.lon]) }));
   let R = NB.R, within = cand.filter(q => q.d <= R);
@@ -81,6 +85,7 @@ function computeNear() {
   U.near = [...best.values()].map(q => ({ ...q, key: q.short + '|' + q.dir, walk: ap(q.d) }));
   U.places = nbPlaces().map(p => ({ p, d: haversine(o, [p.lat, p.lon]) })).filter(x => x.d <= R);
   sortNear();
+  if (quick) return;
   // trajets à pied réels (OSRM piéton) pour les arrêts de la liste, 3 à la fois
   const key = o.join(), sids = [...new Map(U.near.map(g => [g.sid, g.s])).entries()].slice(0, 10);
   let i = 0;
@@ -121,11 +126,13 @@ function rowHTML(g, now) {
     </button>${more}</div>`;
 }
 function nearHTML(now) {
-  const where = U.origin.src === 'gps' ? (U.origin.label === 'Ma position' ? 'Autour de ta position' : 'Près de ' + esc(U.origin.label)) : esc(U.origin.label);
-  const head = `<div class="sec-h"><div><h1>Bus autour de toi</h1><p>${I.pin}<span class="where">${where}</span> · <button type="button" class="link" data-act="ask">changer</button></p></div>${liveChip(U.near.map(g => g.short))}</div>`;
-  if (!U.near.length) return head + `<div class="empty"><b>Aucun arrêt des lignes 144, 160, 244 ou 360 à moins de ${fmtDist(U.R)}.</b><p>Tape une autre adresse avec « changer », ou cherche ta destination ci-dessus.</p></div>`;
+  const O = U.origin, pin = O.src === 'pin';
+  const where = O.src === 'gps' ? (O.stale ? 'Ta dernière position' : O.label === 'Ma position' ? 'Autour de ta position' : 'Près de ' + esc(O.label)) : pin ? (O.label === 'Point choisi' ? 'Autour du point choisi' : 'Près de ' + esc(O.label)) : esc(O.label);
+  const back = O.src !== 'gps' && U.gps ? ` · <button type="button" class="link" data-act="regps">me recentrer</button>` : '';
+  const head = `<div class="sec-h"><div><h1>${pin ? 'Bus autour du point' : 'Bus autour de toi'}</h1><p class="${back ? 'two' : ''}">${I.pin}<span class="where">${where}</span><span class="acts">${back ? '' : '· '}<button type="button" class="link" data-act="ask">changer</button>${back}</span></p></div>${liveChip(U.near.map(g => g.short))}</div>`;
+  if (!U.near.length) return head + `<div class="empty"><b>Aucun arrêt des lignes 144, 160, 244 ou 360 à moins de ${fmtDist(U.R)}.</b><p>Fais glisser le rond près d'une ligne sur la carte, tape une autre adresse avec « changer », ou cherche ta destination ci-dessus.</p></div>`;
   return head + `<div class="list">${nearGroups().map(gr => `<div class="grp" style="--c:${S.meta[gr.short].color}">${gr.rows.map(g => rowHTML(g, now)).join('')}</div>`).join('')}</div>
-    <p class="hint">${U.places.length} arrêt${U.places.length > 1 ? 's' : ''} à moins de ${fmtDist(U.R)} · touche une ligne pour les détails.</p>`;
+    <p class="hint">${U.places.length} arrêt${U.places.length > 1 ? 's' : ''} à moins de ${fmtDist(U.R)} · fais glisser le rond pour voir ailleurs.</p>`;
 }
 function liveChip(shorts) {
   const live = [...new Set(shorts)].some(isLive);
@@ -156,12 +163,12 @@ function openStop(p, fly) {
 }
 
 /* ================= Où vas-tu ? ================= */
-async function computePlan() {
+async function computePlan(quick) {
   if (!U.origin || !U.dest) { U.plan = null; return render(); }
   const O = U.origin, D = U.dest, key = [O.lat, O.lon, D.lat, D.lon].join(); U.planKey = key;
   const direct = haversine([O.lat, O.lon], [D.lat, D.lon]);
   U.plan = { opts: nbPlan(O, D).slice(0, 4), direct, walkDirect: direct <= 2500 ? { duration: direct * 1.3 / MB.SPEED, distance: direct * 1.3, source: 'approx' } : null, loading: true };
-  U.opt = 0; reorder(); render(); syncMap(); fitOpt();
+  U.opt = 0; reorder(); render(); syncMap(); if (quick) return; fitOpt();
   const jobs = [];
   for (const op of U.plan.opts) {
     jobs.push(walkRoute(O, op.a.s).then(w => { op.walkA = w; }));
@@ -254,7 +261,8 @@ panel.addEventListener('click', e => {
   const act = t.closest('[data-act]')?.dataset.act;
   if (act === 'ask') { U.ask = true; return render(); }
   if (act === 'unask') { U.ask = false; return render(); }
-  if (act === 'geo') return locate();
+  if (act === 'geo') return locate(true);
+  if (act === 'regps') return regps();
   if (act === 'last') { const l = mbGet('onde-addr'); if (l) setOrigin({ ...l, src: 'addr' }, true); return; }
   if (act === 'close') { U.stop = null; render(); syncMap(); return U.dest ? fitOpt() : fitNear(); }
   if (act === 'cleardest') return clearDest();
@@ -309,7 +317,7 @@ async function initMap() {
   map.on('error', ev => { if (ev && ev.error && /webgl/i.test(String(ev.error.message))) mapFail('Carte indisponible (WebGL).'); });
   map.on('style.load', () => { U.styleReady = true; addOverlays(); });
   map.on('styleimagemissing', () => { });
-  bindMapEvents(map);
+  bindMapEvents(map); bindLongPress(map);
   busLoop();
 }
 function mapFail(msg) { const m = $('#mapMsg'); m.hidden = false; m.textContent = msg; }
@@ -387,14 +395,20 @@ function bindMapEvents(map) {
   map.on('click', e => { pick(e); });
   map.on('mousemove', e => { if (!map.getLayer('stops-hit')) return; const f = map.queryRenderedFeatures(e.point, { layers: ['stops-hit', 'stops-lbl'] }); map.getCanvas().style.cursor = f.length ? 'pointer' : ''; });
 }
-let meMk = null, destMk = null;
+let meMk = null, destMk = null, gpsMk = null;
 function syncMap() {
   const map = U.map; if (!map || !U.styleReady || !map.getSource('stops')) return;
-  // position de l'utilisateur
+  // le rond : position de départ, qu'on peut faire glisser
   if (U.origin) {
-    if (!meMk) { const el = document.createElement('div'); el.className = 'me'; el.innerHTML = '<i></i><b></b>'; meMk = new maplibregl.Marker({ element: el }).setLngLat([U.origin.lon, U.origin.lat]).addTo(map); }
-    meMk.setLngLat([U.origin.lon, U.origin.lat]); meMk.getElement().classList.toggle('addr', U.origin.src !== 'gps');
+    if (!meMk) meMk = makePin(map);
+    if (!U.dragging) meMk.setLngLat([U.origin.lon, U.origin.lat]);
+    const el = meMk.getElement(); el.classList.toggle('addr', U.origin.src === 'addr'); el.classList.toggle('pin', U.origin.src === 'pin');
   }
+  // position GPS réelle (petit point discret) quand le rond est ailleurs
+  if (U.gps && U.origin && U.origin.src !== 'gps') {
+    if (!gpsMk) { const el = document.createElement('div'); el.className = 'gps-dot'; el.title = 'Ta position réelle'; gpsMk = new maplibregl.Marker({ element: el }).setLngLat([U.gps.lon, U.gps.lat]).addTo(map); el.addEventListener('click', e => { e.stopPropagation(); regps(); }); }
+    gpsMk.setLngLat([U.gps.lon, U.gps.lat]);
+  } else if (gpsMk) { gpsMk.remove(); gpsMk = null; }
   if (U.dest) {
     if (!destMk) { const el = document.createElement('div'); el.className = 'dest-mk'; el.innerHTML = '<span>' + I.flag + '</span>'; destMk = new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat([U.dest.lon, U.dest.lat]).addTo(map); }
     destMk.setLngLat([U.dest.lon, U.dest.lat]);
@@ -424,6 +438,63 @@ function syncMap() {
   map.setPaintProperty('lines', 'line-opacity', dim ? (dim === '-' ? .28 : ['case', ['==', ['get', 'key'], dim], .95, .28]) : .85);
   map.setPaintProperty('lines-case', 'line-opacity', dim ? .35 : (U.sat ? .5 : .9));
   U.focusLines = !U.stop && U.dest && U.plan?.opts[U.opt] ? new Set([U.plan.opts[U.opt].short + '|' + U.plan.opts[U.opt].dir]) : !U.stop && U.sel ? new Set([U.sel]) : null;
+}
+/* ----- le rond déplaçable : glisser (ou appui long sur la carte) = « comme si j'étais là » ----- */
+function makePin(map) {
+  const el = document.createElement('div'); el.className = 'me'; el.innerHTML = '<i></i><b></b>';
+  el.title = 'Fais glisser le rond pour voir les bus ailleurs'; el.setAttribute('aria-label', el.title);
+  const mk = new maplibregl.Marker({ element: el, draggable: true }).setLngLat([U.origin.lon, U.origin.lat]).addTo(map);
+  mk.on('dragstart', () => { U.dragging = true; el.classList.add('drag'); });
+  mk.on('drag', () => { U.dragPt = map.project(mk.getLngLat()); edgePan(map, mk); const l = mk.getLngLat(); pinMove(l.lat, l.lng); });
+  mk.on('dragend', () => { U.dragging = false; U.dragPt = null; el.classList.remove('drag'); const l = mk.getLngLat(); pinMove(l.lat, l.lng, true); });
+  el.addEventListener('click', e => e.stopPropagation());
+  // relâché hors de la carte (ou fenêtre quittée) : on termine proprement le glissé
+  const endOut = () => setTimeout(() => { if (U.dragging) { if (mk._onUp) mk._onUp(); if (U.dragging) mk.fire('dragend'); } }, 0);
+  for (const ev of ['mouseup', 'touchend', 'touchcancel', 'blur']) window.addEventListener(ev, endOut);
+  return mk;
+}
+// la carte suit le rond quand on l'amène au bord
+function edgePan(map, mk) {
+  if (U.edgeRaf) return;
+  const step = () => {
+    U.edgeRaf = null; const p = U.dragPt; if (!U.dragging || !p) return;
+    const c = map.getContainer(), W = c.clientWidth, H = c.clientHeight, mx = 36, top = 64, bot = 56, sp = v => Math.max(-14, Math.min(14, v / 3));
+    const dx = p.x < mx ? sp(p.x - mx) : p.x > W - mx ? sp(p.x - W + mx) : 0, dy = p.y < top ? sp(p.y - top) : p.y > H - bot ? sp(p.y - H + bot) : 0;
+    if (!dx && !dy) return;
+    map.panBy([dx, dy], { duration: 0 }); mk.setLngLat(map.unproject(p));
+    const l = mk.getLngLat(); pinMove(l.lat, l.lng);
+    U.edgeRaf = requestAnimationFrame(step);
+  };
+  U.edgeRaf = requestAnimationFrame(step);
+}
+// recalcul : anti-rebond ~300 ms pendant le glissé (au plus toutes les 700 ms), immédiat au lâcher
+let pinT = null, pinLast = 0;
+function pinMove(lat, lon, final) {
+  U.pinPend = { lat: +lat.toFixed(6), lon: +lon.toFixed(6), label: 'Point choisi', src: 'pin' };
+  clearTimeout(pinT);
+  if (final) return applyPin(true);
+  if (performance.now() - pinLast > 700) applyPin(false); else pinT = setTimeout(() => applyPin(false), 300);
+}
+function applyPin(final) {
+  const o = U.pinPend; if (!o || !U.dataReady) return; U.pinPend = null; pinLast = performance.now();
+  if (final && U.gps && haversine([o.lat, o.lon], [U.gps.lat, U.gps.lon]) < 20) return regps(false); // reposé sur soi
+  setOrigin(o, false, !final);
+  if (!final) return;
+  reverseLabel(o);
+  if (!U.dest && U.map) U.map.easeTo({ center: [o.lon, o.lat], duration: 450 });
+}
+function regps(fly = true) {
+  if (!U.gps) return locate(true);
+  const o = { ...U.gps }; setOrigin(o, fly); reverseLabel(o);
+}
+function bindLongPress(map) { // appui long (mobile) ou clic droit (bureau) sur la carte : le rond saute là
+  let t = null, p0 = null, lpAt = 0;
+  const cancel = () => { clearTimeout(t); t = null; };
+  map.on('touchstart', e => { cancel(); const oe = e.originalEvent; if (oe.touches.length !== 1 || oe.target.closest?.('.me,.bus-wrap,.gps-dot')) return; p0 = e.point;
+    t = setTimeout(() => { t = null; lpAt = Date.now(); navigator.vibrate?.(12); const l = map.unproject(p0); pinMove(l.lat, l.lng, true); }, 550); });
+  map.on('touchmove', e => { if (t && (e.originalEvent.touches.length !== 1 || Math.hypot(e.point.x - p0.x, e.point.y - p0.y) > 8)) cancel(); });
+  map.on('touchend', cancel); map.on('touchcancel', cancel); map.on('zoomstart', cancel);
+  map.on('contextmenu', e => { if (Date.now() - lpAt < 1200) return; e.preventDefault?.(); pinMove(e.lngLat.lat, e.lngLat.lng, true); });
 }
 async function applyStyle() {
   if (!U.map) return; let s; try { s = await styleFor(); } catch (e) { return toast('Fond de carte indisponible'); }
@@ -468,7 +539,10 @@ function busLoop() {
 window.addEventListener('onde-rt', () => { for (const m of busMk.values()) m.remove(); busMk.clear(); render(); });
 
 /* ================= boutons carte ================= */
-$('#btnMe').onclick = () => { if (U.origin) { if (U.dest && U.plan) fitOpt(); else if (U.sel) fitSel(); else fitNear(); } else locate(); };
+$('#btnMe').onclick = () => { // « Me recentrer » : ramène le rond sur ma position GPS réelle
+  if (U.origin && U.origin.src !== 'gps') return U.gps ? regps() : locate(true);
+  if (U.origin) { if (U.dest && U.plan) fitOpt(); else if (U.sel) fitSel(); else fitNear(); } else locate(true);
+};
 $('#btnSat').onclick = () => { U.sat = !U.sat; localStorage.setItem('onde-sat', U.sat ? '1' : '0'); $('#btnSat').setAttribute('aria-pressed', U.sat); $('#btnSat').classList.toggle('on', U.sat); applyStyle(); };
 $('#btnSat').classList.toggle('on', U.sat); $('#btnSat').setAttribute('aria-pressed', U.sat);
 $('#btnTheme').onclick = () => {
@@ -481,6 +555,8 @@ $('#btnTheme').onclick = () => {
 async function boot() {
   const h = location.hash; const to = /[?&]to=([^&]+)/.exec(h);
   if (h) history.replaceState(null, '', location.pathname);
+  // affichage immédiat : dernière position connue (< 6 h), remplacée dès que le GPS répond
+  const lp = mbGet('onde-lastpos'); if (lp && Date.now() - lp.t < 6 * 3600e3 && 'geolocation' in navigator) U.origin = { lat: lp.lat, lon: lp.lon, label: 'Ma position', src: 'gps', stale: true };
   locate(); // la demande de localisation part tout de suite, pendant le chargement des horaires
   if (window.maplibregl) initMap();
   try {
