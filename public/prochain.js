@@ -255,7 +255,7 @@ function nearHTML(now) {
     const meta = S.meta[gr.short] || {}, g0 = gr.rows[0];
     const stops = [...new Set(gr.rows.map(r => r.s.name))];
     return `<section class="lcard" style="--c:${meta.color};--t:${meta.textColor}">
-      <header class="lc-h">${lb(gr.short)}<span class="lc-s"><b>${esc(stops.join(' · '))}</b><small>${modeIcon(modeOf(gr.short))}${modeName(gr.short)}<i class="dotsep"></i>${I.walk}${fmtDur(g0.walk.duration)}${g0.walk.source === 'approx' ? '' : ''}</small></span></header>
+      <header class="lc-h">${lb(gr.short)}<span class="lc-s"><b>${esc(stops.join(' · '))}</b><small>${modeIcon(modeOf(gr.short))}${modeName(gr.short)}<i class="dotsep"></i>${I.walk}${fmtDur(gr.w)}${g0.walk.source === 'approx' ? '' : ''}</small></span></header>
       <div class="grp">${gr.rows.map(g => rowHTML(g, now)).join('')}</div></section>`;
   }).join('')}</div>
     <p class="hint">${U.places.length} arrêt${U.places.length > 1 ? 's' : ''} à moins de ${fmtDist(U.R)} · ${new Set(U.near.map(g => g.short)).size} lignes · déplace la carte pour voir ailleurs.${U.loading ? ' Chargement…' : ''}</p>`;
