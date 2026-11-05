@@ -420,8 +420,8 @@ function nbSearch(input, box, onPick) {
       const rank = a => (a.city && nq.includes(norm(a.city)) ? 0 : 2) + (pl.some(p => Math.abs(p.lat - a.lat) < .03 && haversine([p.lat, p.lon], [a.lat, a.lon]) < 2000) ? 0 : 1) + (o && haversine(o, [a.lat, a.lon]) < 4000 ? 0 : 0.5);
       const addr = (r.results || []).filter(a => !stops.some(s => haversine([s.lat, s.lon], [a.lat, a.lon]) < 60)).map((a, i) => ({ ...a, kind: a.kind || 'place', _r: rank(a) * 100 + i })).sort((a, b) => a._r - b._r);
       hits = [...stops.slice(0, addr.length ? 3 : 4), ...addr].slice(0, 8); render();
-      if (!hits.length) box.innerHTML = '<div class="result muted">Aucun résultat</div>';
-    } catch (e) { if (!hits.length) box.innerHTML = '<div class="result muted">Recherche indisponible</div>'; }
+      if (!hits.length) box.innerHTML = '<div class="result muted">Aucun lieu trouvé — essaie autrement.</div>';
+    } catch (e) { if (!hits.length) box.innerHTML = '<div class="result muted">Recherche indisponible — réessaie dans un instant.</div>'; }
     return hits;
   };
   input.addEventListener('input', () => { clearTimeout(tmr); const q = input.value.trim(); if (!q) { hits = []; render(); return; } tmr = setTimeout(() => run(q), 280); });

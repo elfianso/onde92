@@ -25,14 +25,26 @@
       <a class="brand" href="/" aria-label="Onde 92">
         <span class="brand-mk" aria-hidden="true"><i></i><i></i><i></i></span><b>Onde</b><em>92</em>
       </a>
-      <div class="map-btns">
-        <button class="fab" id="btnTheme" type="button" aria-label="Mode sombre / clair" title="Mode sombre / clair">
-          <svg class="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg>
-          <svg class="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6"/></svg>
+      <div class="map-menu">
+        <button class="fab" id="btnMore" type="button" aria-label="Menu" aria-haspopup="true" aria-expanded="false" title="Menu">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h.01M12 12h.01M18 12h.01"/></svg>
         </button>
-        <button class="fab" id="btnSat" type="button" aria-label="Vue satellite" title="Plan / satellite" aria-pressed="false">
-          <svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg>
-        </button>
+        <div class="menu" id="moreMenu" hidden role="menu">
+          <button role="menuitem" id="btnTheme" type="button">
+            <svg class="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg>
+            <svg class="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6"/></svg>
+            <span id="themeLbl">Mode sombre</span>
+          </button>
+          <button role="menuitem" id="btnSat" type="button" aria-pressed="false">
+            <svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg>
+            <span id="satLbl">Vue satellite</span>
+          </button>
+          <a role="menuitem" href="/lignes.html">
+            <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h11"/></svg>
+            Lignes et horaires
+          </a>
+          <p class="menu-note">Données Île-de-France Mobilités · <span id="footData"></span></p>
+        </div>
       </div>
     </div>
     <button class="fab fab-me" id="btnMe" type="button" aria-label="Me recentrer" title="Me recentrer">
@@ -40,21 +52,21 @@
     </button>
     <div class="map-msg" id="mapMsg" hidden></div>
   </div>
-  <section class="sheet" id="sheet" aria-label="Bus">
-    <div class="grip" aria-hidden="true"></div>
-    <div class="search" id="searchBox" hidden>
-      <label class="search-in">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
-        <input id="q" type="search" inputmode="search" enterkeyhint="search" autocomplete="off" placeholder="Où vas-tu ?" aria-label="Où vas-tu ?">
-        <button class="search-x" id="qClear" type="button" aria-label="Effacer" hidden><svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg></button>
-      </label>
-      <div class="results" id="qRes" role="listbox"></div>
+  <section class="sheet" id="sheet" aria-label="Bus" data-snap="half">
+    <div class="grip-wrap" id="sheetGrip"><span class="grip" aria-hidden="true"></span></div>
+    <div class="sheet-chrome" id="chrome">
+      <div class="search" id="searchBox" hidden>
+        <label class="search-in">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
+          <input id="q" type="search" inputmode="search" enterkeyhint="search" autocomplete="off" placeholder="Où vas-tu ?" aria-label="Où vas-tu ?">
+          <button class="search-x" id="qClear" type="button" aria-label="Effacer" hidden><svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg></button>
+        </label>
+        <div class="results" id="qRes" role="listbox"></div>
+      </div>
+      <div class="status" id="status" hidden></div>
+      <div class="filters" id="filters" hidden role="toolbar" aria-label="Filtrer par ligne"></div>
     </div>
     <div id="panel" class="panel" aria-live="polite"></div>
-    <footer class="foot">
-      <span>Données Île-de-France Mobilités · <span id="footData"></span></span>
-      <a href="/lignes.html">Lignes et horaires</a>
-    </footer>
   </section>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
