@@ -1,4 +1,4 @@
-/* Onde 92 — horaires & suivi en direct des bus 144 · 160 · 244 · 360 */
+/* Prochain — horaires & suivi en direct des bus 144 · 160 · 244 · 360 */
 // Pages « lignes » (ancienne interface) : nécessite core.js.
 'use strict';
 
@@ -25,7 +25,7 @@ function animateWave(svg) {
   });
 }
 async function viewHome() {
-  setLineTheme(null); S.view = { name: 'home' }; document.title = 'Onde 92 — Bus 144 · 160 · 244 · 360 en direct';
+  setLineTheme(null); S.view = { name: 'home' }; document.title = 'Prochain — Bus 144 · 160 · 244 · 360 en direct';
   const app = $('#app');
   app.innerHTML = `
   <section class="hero fade-in">
@@ -146,7 +146,7 @@ async function viewLine(short, params) {
   const st = { dir: +(params.get('d') || 0), stop: params.get('s'), tab: params.get('v') || 'live', ttDay: todayYmd(), ttStop: null, selBus: null };
   if (st.stop) { for (const d of [0, 1]) if (Ld.main[d].stopIndex.has(st.stop)) st.dir = d; }
   S.view = { name: 'line', short };
-  document.title = `Bus ${short} — Onde 92`;
+  document.title = `Bus ${short} — Prochain`;
   const app = $('#app');
   const setUrl = () => { const p = new URLSearchParams(); if (st.dir) p.set('d', st.dir); if (st.stop) p.set('s', st.stop); if (st.tab !== 'live') p.set('v', st.tab); history.replaceState(null, '', `#/ligne/${short}${p.toString() ? '?' + p : ''}`); };
   app.innerHTML = `
@@ -368,7 +368,7 @@ async function viewStop(key) {
   const hits = [];
   for (const l of S.lines) { const L = S.data[l.short]; for (const s of Object.values(L.stops)) if (s.key === key) hits.push({ l, s, L }); }
   if (!hits.length) return viewHome();
-  const name = hits[0].s.name; document.title = `${name} — Onde 92`;
+  const name = hits[0].s.name; document.title = `${name} — Prochain`;
   const shorts = [...new Set(hits.map(h => h.l.short))]; if (shorts.length === 1) setLineTheme(S.meta[shorts[0]]);
   S.view.shorts = shorts;
   $('#app').innerHTML = `

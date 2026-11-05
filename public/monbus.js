@@ -1,10 +1,10 @@
-/* Onde 92 — « Est-ce que j'ai mon bus ? »
+/* Prochain — « Est-ce que j'ai mon bus ? »
    Point de départ (géolocalisation ou adresse BAN) → arrêt d'une ligne → itinéraire piéton (OSRM foot)
    → pour chacun des 3 prochains passages : tu l'as / juste / raté, avec compte à rebours. */
 'use strict';
 
 async function viewMonBus(params) {
-  setLineTheme(null); S.view = { name: 'monbus' }; document.title = "Est-ce que j'ai mon bus ? — Onde 92";
+  setLineTheme(null); S.view = { name: 'monbus' }; document.title = "Est-ce que j'ai mon bus ? — Prochain";
   const saved = mbGet('onde-monbus', {});
   const st = {
     origin: mbGet('onde-origin'), home: mbGet('onde-home'),

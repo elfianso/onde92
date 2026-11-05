@@ -218,4 +218,4 @@ async function main() {
   finally { if (tmpZip) fs.rmSync(tmpZip, { force: true }); }
 }
 if (require.main === module) main().catch(e => { log('ÉCHEC', e.message); process.exit(1); });
-module.exports = { build };
+module.exports = { build, download, zipEntries, entryStream, splitCSV, each, hav, dp, project, hms, r6, ymd, parseYmd, localIso };

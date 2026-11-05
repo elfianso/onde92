@@ -1,4 +1,4 @@
-/* Onde 92 — moteur partagé (horaires GTFS, temps réel PRIM en cache, positions, « fin », marche, verdict, itinéraire).
+/* Prochain — moteur partagé (horaires GTFS, temps réel PRIM en cache, positions, « fin », marche, verdict, itinéraire).
    Utilisé par la page principale (onde.js) et par les pages lignes (lignes.html). Aucun accès DOM au chargement. */
 'use strict';
 const $ = (s, r = document) => r.querySelector(s);
@@ -51,12 +51,22 @@ const isFav = name => S.favs.includes(name);
 function toggleFav(name) { S.favs = isFav(name) ? S.favs.filter(f => f !== name) : [...S.favs, name]; saveFavs(); toast(isFav(name) ? '★ Arrêt ajouté aux favoris' : 'Arrêt retiré des favoris'); }
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._t); t._t = setTimeout(() => t.classList.remove('show'), 2200); }
 
+// Clé de ligne : « 144 » (anciennes pages, /data/line-144.json) ou « reseau:id » (/data/n/<reseau>/l/<id>.json).
+const linePath = k => k.includes(':') ? `/data/n/${k.split(':')[0]}/l/${k.slice(k.indexOf(':') + 1)}.json` : `/data/line-${k}.json`;
+const linePending = {};
 async function getLine(short) {
   if (S.data[short]) return S.data[short];
-  const L = await fetch(`/data/line-${short}.json`).then(r => r.json());
+  if (linePending[short]) return linePending[short];
+  return (linePending[short] = fetch(linePath(short)).then(r => { if (!r.ok) throw new Error('ligne ' + short + ' : ' + r.status); return r.json(); }).then(L => prepLine(short, L)).finally(() => { delete linePending[short]; }));
+}
+function prepLine(short, L) {
+  L.short = short;
   L.patterns.forEach((p, i) => { p.idx = i; p.stopIndex = new Map(); p.stops.forEach((s, k) => { if (!p.stopIndex.has(s)) p.stopIndex.set(s, k); }); p.trips = []; });
-  L.tripObjs = L.trips.map(([svc, pi, t0, dl, tid]) => { const times = [t0]; let t = t0; for (const d of dl) times.push(t += d); const o = { svc, p: L.patterns[pi], times, tid }; L.patterns[pi].trips.push(o); return o; });
+  L.tripObjs = L.trips.map(([svc, pi, t0, dl0, tid]) => { const dl = typeof dl0 === 'number' ? L.deltas[dl0] : dl0; const times = [t0]; let t = t0; for (const d of dl) times.push(t += d); const o = { svc, p: L.patterns[pi], times, tid }; L.patterns[pi].trips.push(o); return o; });
   L.main = [0, 1].map(d => L.patterns.filter(p => p.dir === d).sort((a, b) => b.n - a.n)[0]);
+  if (!L.main[0]) L.main[0] = L.main[1]; if (!L.main[1]) L.main[1] = L.main[0];
+  // sens desservis à chaque quai (hors terminus d'arrivée) : sert à classer un passage temps réel
+  L.dirsAt = new Map(); for (const p of L.patterns) p.stops.forEach((s, k) => { if (k === p.stops.length - 1) return; let a = L.dirsAt.get(s); if (!a) L.dirsAt.set(s, a = new Set()); a.add(p.dir); });
   L._svc = {};
   L.activeSvc = ymd => L._svc[ymd] ||= new Set(Object.entries(L.services).filter(([, ds]) => ds.includes(ymd)).map(([s]) => s));
   for (const [id, s] of Object.entries(L.stops)) { s.id = id; s.key = norm(s.name); }
@@ -173,13 +183,31 @@ function rtJourneys(L, rt) {
   S.rtStats ||= {}; S.rtStats[L.short] = { predictions: [...preds.values()].reduce((a, x) => a + x.length, 0), buses: total, matched };
   return out;
 }
-function isLive(short) { const r = S.rt[short]; return !!(r && r.mode === 'temps-reel' && r.journeys?.length); }
+function isLive(short) { const r = S.rt[short]; return !!(r && r.mode === 'temps-reel' && (r.kind === 'trips' ? r.byTrip?.size : r.journeys?.length)); }
 function journeys(short, force) {
   const L = S.data[short]; if (!L) return [];
   const now = Date.now();
   if (!force && S.journeys[short] && now - S.journeysAt[short] < 15000) return S.journeys[short];
-  let js = isLive(short) ? rtJourneys(L, S.rt[short]) : theoJourneys(L, now);
+  const R = S.rt[short];
+  let js = R && R.kind === 'trips' && R.byTrip ? tripRtJourneys(L, R, now) : isLive(short) ? rtJourneys(L, R) : theoJourneys(L, now);
   S.journeysAt[short] = now; return (S.journeys[short] = js);
+}
+// GTFS-RT (TripUpdates) : chaque course connue reçoit ses heures estimées (retard propagé d'arrêt en arrêt).
+// R.byTrip : clé course (|jour) -> [[stop_id, heure_epoch_s, retard_s|null], …]
+function tripRtJourneys(L, R, now) {
+  const out = theoJourneys(L, now);
+  for (const v of out) {
+    const u = R.byTrip.get(v.trip.tid + '|' + v.day) || (R.noDate ? R.byTrip.get(v.trip.tid) : null); if (!u) continue;
+    const P = v.p, n = P.stops.length, del = new Array(n).fill(null);
+    if (R.noDate) { const k0 = P.stopIndex.get(u[0][0]); if (k0 == null || Math.abs(u[0][1] * 1000 - v.tms[k0]) > 3 * 3600e3) continue; }
+    for (const [sid, t, d] of u) { const k = P.stopIndex.get(sid); if (k == null) continue; del[k] = d != null ? d * 1000 : (t ? t * 1000 - v.tms[k] : 0); }
+    let first = del.findIndex(x => x != null); if (first < 0) continue;
+    let cur = del[first]; const aimed = v.tms.slice();
+    for (let k = 0; k < n; k++) { if (del[k] != null) cur = del[k]; v.tms[k] = aimed[k] + (k < first ? del[first] : cur); }
+    for (let k = 1; k < n; k++) if (v.tms[k] < v.tms[k - 1]) v.tms[k] = v.tms[k - 1];
+    v.aimed = aimed; v.rt = true; v.delay = cur;
+  }
+  return out;
 }
 function running(short, now = Date.now()) {
   const out = [];
@@ -190,8 +218,17 @@ function running(short, now = Date.now()) {
 // Chaque départ porte la course GTFS rattachée (trip, k = rang de l'arrêt dans sa variante, day = journée de service)
 // et `fin` = dernier passage de la soirée à ce quai dans ce sens (voir isFin).
 function departures(short, stopId, now = Date.now(), n = 4) {
-  const L = S.data[short]; const res = []; let rtMax = 0; const used = new Set();
-  const raw = isLive(short) ? rtPredictions(L, S.rt[short]).get(stopId) : null;
+  const L = S.data[short]; const res = []; let rtMax = 0; const used = new Set(); const R = S.rt[short];
+  if (R && R.kind === 'trips' && R.byTrip) { // GTFS-RT : heures estimées des courses connues, horaires prévus sinon
+    for (const v of journeys(short)) {
+      const k = v.p.stopIndex.get(stopId); if (k == null || k === v.p.stops.length - 1) continue;
+      const t = v.tms[k]; if (t < now - 30e3) continue;
+      res.push({ t, rt: v.rt, aim: v.aimed ? v.aimed[k] : null, delay: v.aimed ? t - v.aimed[k] : 0, headsign: v.headsign, dir: v.p.dir, trip: v.trip, k, day: v.day });
+    }
+    const out = res.sort((a, b) => a.t - b.t).slice(0, n); for (const d of out) d.fin = isFin(L, stopId, d); return out;
+  }
+  const raw = isLive(short) ? rtPredictions(L, R).get(stopId) : null;
+  const dirOf = pr => { const ds = L.dirsAt?.get(stopId); if (ds && ds.size === 1) return [...ds][0]; const nn = pr.destName ? norm(pr.destName) : ''; const p = nn && L.patterns.find(p => (!ds || ds.has(p.dir)) && (norm(p.headsign).includes(nn) || nn.includes(norm(p.headsign)))); return p ? p.dir : (L.main[0].stopIndex.has(stopId) ? 0 : 1); };
   if (raw && raw.length) {
     const js = journeys(short);
     for (const pr of raw) {
@@ -202,10 +239,10 @@ function departures(short, stopId, now = Date.now(), n = 4) {
       if (bv?.trip) used.add(bv.trip.tid + bv.day);
       const pat = L.patterns.find(p => p.stops[p.stops.length - 1] === pr.dest);
       const tk = bv?.trip ? bv.trip.p.stopIndex.get(stopId) : null;
-      res.push({ t: pr.e, rt: true, aim: bv ? bv.aimed[k] : null, delay: bv ? pr.e - bv.aimed[k] : 0, headsign: pat ? pat.headsign : (pr.destName || ''), dir: pat ? pat.dir : (L.main[0].stopIndex.has(stopId) ? 0 : 1), prox: pr.prox, trip: tk != null ? bv.trip : null, k: tk, day: tk != null ? bv.day : null });
+      res.push({ t: pr.e, rt: true, aim: bv ? bv.aimed[k] : null, delay: bv ? pr.e - bv.aimed[k] : 0, headsign: pat ? pat.headsign : (pr.destName || ''), dir: pat ? pat.dir : dirOf(pr), prox: pr.prox, trip: tk != null ? bv.trip : null, k: tk, day: tk != null ? bv.day : null });
       rtMax = Math.max(rtMax, pr.e);
     }
-  } else if (isLive(short)) {
+  } else if (isLive(short) && R.kind !== 'stops') { // flux « ligne » complet ; un flux « arrêt » ne dit rien des autres arrêts
     for (const v of journeys(short)) {
       const k = v.p.stopIndex.get(stopId); if (k == null || k === v.p.stops.length - 1) continue;
       const t = v.tms[k]; if (t < now - 30e3) continue;
@@ -281,7 +318,7 @@ async function pollRT(short) {
 }
 
 /* ---------------- UI commune ---------------- */
-function badge(meta, cls = '') { return `<span class="badge ${cls}" style="--c:${meta.color};--t:${meta.textColor}">${esc(meta.short)}</span>`; }
+function badge(meta, cls = '') { return `<span class="badge ${cls} m-${meta.mode || 'bus'}" style="--c:${meta.color};--t:${meta.textColor}">${esc(meta.label || meta.short)}</span>`; }
 function setLineTheme(meta) {
   const r = document.documentElement.style;
   if (meta) { r.setProperty('--line', meta.color); r.setProperty('--line-ink', meta.textColor); }
@@ -318,7 +355,7 @@ function fmtCount(ms) { if (ms <= 0) return 'maintenant'; const s = Math.round(m
 
 // Arrêts (quais) d'une ligne dans un sens, dans l'ordre du parcours principal, sans les terminus d'arrivée.
 function lineDirStops(short, dir) {
-  const Ld = S.data[short]; const M = Ld.main[dir]; const seen = new Set(); const out = [];
+  const Ld = S.data[short]; const M = Ld.main[dir]; if (!M) return []; const seen = new Set(); const out = [];
   const add = (p, k) => { const sid = p.stops[k]; if (seen.has(sid) || k === p.stops.length - 1) return; seen.add(sid); out.push({ sid, s: Ld.stops[sid], order: M.stopIndex.has(sid) ? M.stopIndex.get(sid) : (M.stopIndex.get(p.stops[k + 1]) ?? 99) - .5 }); };
   M.stops.forEach((_, k) => add(M, k));
   for (const p of Ld.patterns) if (p.dir === dir && p !== M && p.n >= 3) p.stops.forEach((_, k) => add(p, k));

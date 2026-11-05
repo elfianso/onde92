@@ -1,11 +1,11 @@
-/* Onde 92 — « Autour de moi » (arrêts et bus proches) & « On va où ? » (itinéraire sur les lignes 144 · 160 · 244 · 360).
+/* Prochain — « Autour de moi » (arrêts et bus proches) & « On va où ? » (itinéraire sur les lignes 144 · 160 · 244 · 360).
    Tout est calculé dans le navigateur à partir des horaires GTFS déjà chargés (line-*.json) et du temps réel PRIM
    déjà mis en cache par ligne (/api/rt/:ligne) : aucun appel PRIM supplémentaire. Marche : /api/walk (OSRM piéton). */
 'use strict';
 
 /* ---------- vue ---------- */
 async function viewAutour(params) {
-  setLineTheme(null); S.view = { name: 'autour' }; document.title = 'Autour de moi — Onde 92';
+  setLineTheme(null); S.view = { name: 'autour' }; document.title = 'Autour de moi — Prochain';
   const st = {
     origin: mbGet('onde-origin'), home: mbGet('onde-home'), dest: mbGet('onde-dest'),
     tab: 'near', term: mbGet('onde-nb-term', ''), sel: null, opt: 0,

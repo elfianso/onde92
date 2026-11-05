@@ -8,7 +8,7 @@
   ],
   "functions": {
     "api/**/*.js": {
-      "includeFiles": "public/data/**",
+      "includeFiles": "public/data/{*.json,n/networks.json}",
       "maxDuration": 15
     }
   },

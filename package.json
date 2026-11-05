@@ -2,12 +2,16 @@
   "name": "onde92",
   "version": "1.0.0",
   "private": true,
-  "description": "Onde 92 — horaires et suivi en temps réel des bus 144, 160, 244 et 360 (Hauts-de-Seine)",
+  "description": "Prochain — bus, tram, métro, RER et trains en temps réel : toute l'Île-de-France, Lille (Ilévia) et les trains SNCF dans toute la France",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "gtfs": "node --max-old-space-size=144 scripts/gtfs-build.js public/data"
+    "gtfs": "node --max-old-space-size=144 scripts/gtfs-build.js public/data",
+    "dev": "node scripts/vercel-local.js",
+    "networks": "for n in idfm ilevia sncf; do node --max-old-space-size=2200 scripts/build-network.js $n || exit 1; done && node scripts/build-network.js index"
   },
-  "engines": { "node": "22.x" },
+  "engines": {
+    "node": "22.x"
+  },
   "license": "UNLICENSED"
 }

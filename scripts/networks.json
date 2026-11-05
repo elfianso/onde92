@@ -1,0 +1,58 @@
+{
+ "tile": {
+  "lat": 0.02,
+  "lon": 0.03
+ },
+ "windowDays": 21,
+ "networks": [
+  {
+   "id": "idfm",
+   "name": "Île-de-France Mobilités",
+   "region": "Île-de-France",
+   "gtfs": "https://eu.ftp.opendatasoft.com/stif/GTFS/IDFM-gtfs.zip",
+   "stripPrefix": "IDFM:",
+   "tripKey": "index",
+   "shapes": true,
+   "rt": {
+    "type": "prim-sm",
+    "label": "IDFM (PRIM)"
+   },
+   "attribution": "Île-de-France Mobilités (PRIM)"
+  },
+  {
+   "id": "ilevia",
+   "name": "Ilévia",
+   "region": "Métropole européenne de Lille",
+   "gtfs": "https://media.ilevia.fr/opendata/gtfs.zip",
+   "tripKey": "full",
+   "shapes": false,
+   "rt": {
+    "type": "gtfsrt",
+    "url": "https://proxy.transport.data.gouv.fr/resource/ilevia-lille-gtfs-rt",
+    "label": "Ilévia (GTFS-RT)",
+    "ttl": 30
+   },
+   "attribution": "Ilévia / MEL via transport.data.gouv.fr"
+  },
+  {
+   "id": "sncf",
+   "name": "SNCF",
+   "region": "France (TER, Intercités, TGV)",
+   "gtfs": "https://eu.ftp.opendatasoft.com/sncf/plandata/Export_OpenData_SNCF_GTFS_NewTripId.zip",
+   "tripKey": "split",
+   "shapes": false,
+   "sncfFamilies": true,
+   "rt": {
+    "type": "gtfsrt",
+    "url": "https://proxy.transport.data.gouv.fr/resource/sncf-gtfs-rt-trip-updates",
+    "label": "SNCF (GTFS-RT)",
+    "ttl": 60
+   },
+   "attribution": "SNCF Voyageurs via transport.data.gouv.fr",
+   "tile": {
+    "lat": 0.1,
+    "lon": 0.15
+   }
+  }
+ ]
+}

@@ -1,0 +1,105 @@
+{
+ "generated": "2026-11-05T21:24:28",
+ "networks": [
+  {
+   "id": "idfm",
+   "name": "Île-de-France Mobilités",
+   "region": "Île-de-France",
+   "bbox": [
+    47.961079,
+    1.149856,
+    49.459332,
+    3.560668
+   ],
+   "generated": "2026-11-05T21:24:27",
+   "window": [
+    "20261104",
+    "20261126"
+   ],
+   "rt": {
+    "type": "prim-sm",
+    "label": "IDFM (PRIM)"
+   },
+   "attribution": "Île-de-France Mobilités (PRIM)",
+   "modes": [
+    "metro",
+    "bus",
+    "rer",
+    "cable",
+    "tram",
+    "train"
+   ],
+   "nLines": 2024,
+   "tile": {
+    "lat": 0.02,
+    "lon": 0.03
+   }
+  },
+  {
+   "id": "ilevia",
+   "name": "Ilévia",
+   "region": "Métropole européenne de Lille",
+   "bbox": [
+    50.510731,
+    2.800832,
+    50.788235,
+    3.273467
+   ],
+   "generated": "2026-11-05T21:08:36",
+   "window": [
+    "20261104",
+    "20261126"
+   ],
+   "rt": {
+    "type": "gtfsrt",
+    "url": "https://proxy.transport.data.gouv.fr/resource/ilevia-lille-gtfs-rt",
+    "label": "Ilévia (GTFS-RT)",
+    "ttl": 30
+   },
+   "attribution": "Ilévia / MEL via transport.data.gouv.fr",
+   "modes": [
+    "bus",
+    "metro",
+    "tram"
+   ],
+   "nLines": 157,
+   "tile": {
+    "lat": 0.02,
+    "lon": 0.03
+   }
+  },
+  {
+   "id": "sncf",
+   "name": "SNCF",
+   "region": "France (TER, Intercités, TGV)",
+   "bbox": [
+    41.378961,
+    -4.480306,
+    51.03041,
+    11.5587
+   ],
+   "generated": "2026-11-05T21:20:39",
+   "window": [
+    "20261104",
+    "20261126"
+   ],
+   "rt": {
+    "type": "gtfsrt",
+    "url": "https://proxy.transport.data.gouv.fr/resource/sncf-gtfs-rt-trip-updates",
+    "label": "SNCF (GTFS-RT)",
+    "ttl": 60
+   },
+   "attribution": "SNCF Voyageurs via transport.data.gouv.fr",
+   "modes": [
+    "train",
+    "car",
+    "tram"
+   ],
+   "nLines": 961,
+   "tile": {
+    "lat": 0.1,
+    "lon": 0.15
+   }
+  }
+ ]
+}
