@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div class="app" id="app">
+<div class="app" id="app" data-sheet="half">
   <div class="map-area">
     <div id="map" class="map" aria-label="Carte des lignes et des arrêts"></div>
     <div class="me-fixed pin" id="mePin" aria-hidden="true"><i></i><b></b></div>
@@ -56,6 +56,7 @@
     <div class="map-msg" id="mapMsg" hidden></div>
   </div>
   <section class="sheet" id="sheet" aria-label="Départs" data-snap="half">
+    <div class="busy" id="busy" aria-hidden="true"></div>
     <div class="grip-wrap" id="sheetGrip"><span class="grip" aria-hidden="true"></span></div>
     <div class="sheet-chrome" id="chrome">
       <div class="search" id="searchBox" hidden>
