@@ -43,23 +43,41 @@ const MAXL = 44; // lignes chargées au plus pour un point
 const isDark = () => document.documentElement.dataset.theme === 'dark';
 const panel = $('#panel');
 
-/* ================= formats ================= */
+/* ================= formats : compte à rebours d'abord, heure ensuite ================= */
 const minsOf = (t, now) => Math.max(0, Math.floor((t - now) / 60000));
-function bigWhen(d, now) {
-  if (!d) return '<span class="tm none">—</span>';
-  const live = d.rt ? I.live : '';
-  if (d.t - now < 60e3) return `<span class="tm ${d.rt ? 'rt' : ''}">${live}<b>&lt;1</b><small>min</small></span>`;
+const FIN = '<em class="fin" title="Dernier départ de la soirée à cet arrêt, dans ce sens">fin</em>';
+const fin = d => d && d.fin ? FIN : '';
+// Gros compte à rebours : « 4 min », « <1 min », « maintenant », puis l'heure au-delà d'une heure.
+function bigWhen(d, now, dim) {
+  if (!d) return '<span class="cd none"><b>—</b></span>';
+  const c = `cd${d.rt ? ' rt' : ''}${dim ? ' dim' : ''}`, lv = d.rt ? I.live : '';
+  if (d.t - now < 45e3) return `<span class="${c} now">${lv}<b>maintenant</b></span>`;
   const m = minsOf(d.t, now);
-  return m < 60 ? `<span class="tm ${d.rt ? 'rt' : ''}">${live}<b>${m}</b><small>min</small></span>` : `<span class="tm ${d.rt ? 'rt' : ''}">${live}<b class="hm">${fmtHM(d.t)}</b></span>`;
+  if (m < 1) return `<span class="${c}">${lv}<b>&lt;1</b><small>min</small></span>`;
+  return m < 60 ? `<span class="${c}">${lv}<b>${m}</b><small>min</small></span>` : `<span class="${c} hm">${lv}<b>${fmtHM(d.t)}</b></span>`;
 }
-const inLong = (d, now) => { const m = minsOf(d.t, now); return d.t - now < 60e3 ? '&lt;1 min' : m < 60 ? m + ' min' : 'dans ' + Math.floor(m / 60) + ' h ' + String(m % 60).padStart(2, '0'); };
+const smallWhen = (d, now) => d.t - now < 60e3 ? '&lt;1' : minsOf(d.t, now) < 60 ? String(minsOf(d.t, now)) : fmtHM(d.t);
+const relWhen = (d, now) => d.t - now < 45e3 ? 'maintenant' : minsOf(d.t, now) < 60 ? 'dans ' + Math.max(1, minsOf(d.t, now)) + ' min' : 'dans ' + Math.floor(minsOf(d.t, now) / 60) + ' h ' + String(minsOf(d.t, now) % 60).padStart(2, '0');
+// Les suivants, en petit : « puis 12 · 19 min »
+function nextRow(ds, now) {
+  if (!ds.length) return '';
+  const allMin = ds.every(d => minsOf(d.t, now) < 60);
+  return `<span class="nx"><span class="nx-p">puis</span>${ds.map(d => `<span class="nx-t${d.rt ? ' rt' : ''}"><span>${smallWhen(d, now)}${!allMin && minsOf(d.t, now) < 60 ? '<small> min</small>' : ''}</span>${fin(d)}</span>`).join('<i class="nx-s">·</i>')}${allMin ? '<span class="nx-u">min</span>' : ''}</span>`;
+}
 const shortWhen = (d, now) => d.t - now < 60e3 ? '&lt;1 min' : minsOf(d.t, now) < 60 ? minsOf(d.t, now) + ' min' : fmtHM(d.t);
-const src = d => d.rt ? '<span class="src live">' + I.live + 'Live</span>' : '<span class="src">Prévu</span>';
-const fin = d => d && d.fin ? '<em class="fin" title="Dernier départ de la soirée à cet arrêt, dans ce sens">fin</em>' : '';
-const vPill = (v, long) => `<span class="v ${v.k}"><i></i>${long ? v.txt : v.short}</span>`;
+const vPill = v => `<span class="v ${v.k}">${v.short}</span>`;
 const lbl = k => (S.meta[k] && (S.meta[k].label || S.meta[k].short)) || '?';
 const lb = (k, cls = '') => { const m = S.meta[k] || { color: '#888', textColor: '#fff', mode: 'bus' }; const t = lbl(k); return `<span class="lb m-${m.mode || 'bus'} ${t.length > 4 ? 'long' : ''} ${cls}" style="--c:${m.color};--t:${m.textColor}">${esc(t)}</span>`; };
-const headOf = (k, dir) => { const L = S.data[k]; const M = L && (L.main[dir] || L.main[0]); return M ? M.headsign : ''; };
+// Sens lisible : jamais « Aller / Retour », un code de mission ou un numéro — le nom du terminus à la place.
+const isCode = h => !h || /^(aller|retour|sens ?\d*|direction ?\d*|\d{1,4})$/i.test(h.trim()) || /^[A-Z]{4}\d*$/.test(h.trim());
+function dirName(k, dir, hs) {
+  const L = S.data[k], M = L && (L.main[dir] || L.main[0]);
+  if (hs && !isCode(hs)) return hs;
+  if (M && !isCode(M.headsign)) return M.headsign;
+  const last = M && M.stops[M.stops.length - 1], nm = last && L.stops[last] && L.stops[last].name;
+  return nm || (S.meta[k]?.termini?.[dir]) || hs || '';
+}
+const headOf = (k, dir) => dirName(k, dir);
 const modeName = k => (MODES[modeOf(k)] || MODES.bus).n;
 const vehicleWord = k => ({ metro: 'métro', rer: 'RER', train: 'train', tram: 'tram', cable: 'cabine', car: 'car', ferry: 'navette' })[modeOf(k)] || 'bus';
 
@@ -217,56 +235,60 @@ function nearGroups() { // une carte par ligne (la plus proche d'abord), puis se
   const now = Date.now(); // lignes qui passent dans l'heure d'abord (par distance), puis celles qui dorment
   const soonOf = rows => rows.some(r => { const d = rowDeps(r, now, 1)[0]; return d && d.t - now < 60 * 60e3; });
   return [...by.entries()].map(([short, rows]) => ({ short, rows: rows.sort((a, b) => a.dir - b.dir), w: Math.min(...rows.map(r => r.walk.duration)), soon: soonOf(rows) }))
-    .sort((a, b) => (b.soon - a.soon) || a.w - b.w || byMode(a.short, b.short));
+    .sort((a, b) => (b.soon - a.soon) || Math.round(a.w / 60) - Math.round(b.w / 60) || byMode(a.short, b.short) || a.w - b.w);
 }
 function rowDeps(g, now, n = 8) { return departures(g.short, g.sid, now, n + 4).filter(d => d.dir === g.dir && d.t > now - 20e3).slice(0, n); }
-function rowHTML(g, now) {
-  const W = g.walk.duration, ds = rowDeps(g, now, 6), a = ds[0], on = U.sel === g.key;
-  const va = a && a.t - now < 90 * 60e3 && nbVerdict(a, W, now);
-  const then = ds.slice(1, 3).map(d => shortWhen(d, now).replace(' min', '') + (d.fin ? ' <em class="fin">fin</em>' : '')).join(' · ');
-  const thenTxt = ds.length > 1 ? `puis ${then}${minsOf(ds[1].t, now) < 60 && (!ds[2] || minsOf(ds[2].t, now) < 60) ? ' min' : ''}` : a ? 'dernier pour l\'instant' : '';
-  const more = on ? `<div class="more">
-      <ul class="deps">${ds.map(d => { const v = nbVerdict(d, W, now); const hs = d.headsign && d.headsign !== headOf(g.short, g.dir) ? `<small>terminus ${esc(d.headsign)}</small>` : '';
-        const late = d.rt && d.delay > 90e3 ? `<small class="late">+${Math.round(d.delay / 60000)} min de retard</small>` : '';
-        return `<li class="${v.k}"><span class="dt"><b>${fmtHM(d.t)}</b>${fin(d)}</span><span class="dm">${inLong(d, now)}${hs}${late}</span>${src(d)}${vPill(v)}</li>`; }).join('') || `<li class="none">Plus de ${vehicleWord(g.short)} prévu.</li>`}</ul>
-      <div class="more-a"><button type="button" class="link" data-stopsid="${esc(g.short + '|' + g.sid)}">${I.pin}Tous les départs à cet arrêt</button>${N.legacy[g.short] ? `<a class="link faint" href="/lignes.html#/ligne/${N.legacy[g.short]}?${g.dir ? 'd=1&' : ''}s=${encodeURIComponent(g.sid)}">Fiche de la ligne</a>` : ''}</div>
-    </div>` : '';
-  return `<div class="row ${on ? 'on' : ''}" data-key="${esc(g.key)}">
-    <button class="row-h" type="button" aria-expanded="${on}">
-      <span class="row-m"><b class="to">${I.arrow}<span>${esc(headOf(g.short, g.dir))}</span></b>
-        <small>${va ? vPill(va) : ''}${thenTxt ? `<span class="then">${va ? '· ' : ''}${thenTxt}</span>` : ''}</small></span>
-      <span class="row-t">${bigWhen(a, now)}${a ? '' : '<span class="src">plus aujourd\'hui</span>'}${fin(a)}</span>
-    </button>${more}</div>`;
+// Ligne secondaire : « Tu l'as · pars à 13:08 » / « Juste · presse le pas » / « Raté · suivant dans 12 min » — seulement si utile.
+function verdictLine(ds, W, now) {
+  const a = ds[0]; if (!a || W == null || W > 15 * 60 || a.t - now > 30 * 60e3) return { html: '', miss: false }; // loin à pied : verdict inutile
+  const v = nbVerdict(a, W, now);
+  if (v.k === 'ok') return { html: `<span class="v ok">Tu l'as</span><span>${v.left < 90e3 ? 'pars maintenant' : 'pars à ' + fmtHM(v.leaveBy)}</span>`, miss: false };
+  if (v.k === 'tight') return { html: '<span class="v tight">Juste</span><span>presse le pas</span>', miss: false };
+  const nx = ds.find(d => nbVerdict(d, W, now).k !== 'miss');
+  return { html: `<span class="v miss">Raté</span>${nx ? `<span>suivant ${minsOf(nx.t, now) < 60 ? relWhen(nx, now) : 'à ' + fmtHM(nx.t)}</span>` : ''}`, miss: true };
+}
+// Un sens d'une ligne : « vers Terminus » à gauche, gros compte à rebours à droite, les suivants dessous.
+function dirRowHTML(g, ds, W, now, o = {}) {
+  const a = ds[0], vl = verdictLine(ds, W, now);
+  const sub = vl.html || (a ? '' : `<span>Plus de ${vehicleWord(g.short)} aujourd'hui</span>`);
+  const inner = `<span class="dir-l"><span class="dir-to"><small>vers</small><b>${esc(dirName(g.short, g.dir, a && a.headsign))}</b></span>${sub ? `<span class="dir-sub">${sub}</span>` : ''}${o.stop ? `<span class="dir-at">${I.pin}${esc(o.stop)}</span>` : ''}</span>
+      <span class="dir-r">${bigWhen(a, now, vl.miss)}${fin(a)}${nextRow(ds.slice(1, 3), now)}</span>`;
+  if (o.static) return `<div class="dir"><div class="dir-h">${inner}</div></div>`;
+  const on = U.sel === g.key;
+  return `<div class="dir ${on ? 'on' : ''}" data-key="${esc(g.key)}"><button class="dir-h" type="button" aria-expanded="${on}">${inner}</button>${on ? moreHTML(g, ds, W, now) : ''}</div>`;
+}
+function moreHTML(g, ds, W, now) {
+  const tl = ds.map(d => { const v = nbVerdict(d, W, now), late = d.rt && d.delay > 90e3 ? `<small class="late">+${Math.round(d.delay / 60000)} min</small>` : '';
+    const hs = d.headsign && !isCode(d.headsign) && d.headsign !== dirName(g.short, g.dir) ? `<small class="hs">→ ${esc(d.headsign)}</small>` : '';
+    return `<li class="${v.k === 'miss' ? 'miss' : ''}"><b>${d.rt ? I.live : ''}${fmtHM(d.t)}</b><small>${v.k === 'miss' ? 'raté' : relWhen(d, now)}</small>${late}${hs}${fin(d)}</li>`; }).join('');
+  return `<div class="more${U.opened === g.key ? ' opening' : ''}">
+      ${tl ? `<ol class="tl">${tl}</ol>` : `<p class="none">Plus de ${vehicleWord(g.short)} prévu.</p>`}
+      <div class="more-a"><button type="button" class="link" data-stopsid="${esc(g.short + '|' + g.sid)}">${I.pin}Tous les départs à ${esc(g.s.name)}</button>${N.legacy[g.short] ? `<a class="link faint" href="/lignes.html#/ligne/${N.legacy[g.short]}?${g.dir ? 'd=1&' : ''}s=${encodeURIComponent(g.sid)}">Fiche de la ligne</a>` : ''}</div>
+    </div>`;
 }
 function visibleGroups() {
   let all = nearGroups();
   if (U.mfilter) all = all.filter(gr => modeOf(gr.short) === U.mfilter);
   return U.filter.size ? all.filter(gr => U.filter.has(gr.short)) : all;
 }
-function coverageHTML() { return `<ul class="cov">${(N.index?.networks || []).map(n => `<li><b>${esc(n.name)}</b><span>${esc(n.region)}</span></li>`).join('')}</ul>`; }
-function nearHTML(now) {
+function lineCardHTML(gr, now) {
+  const stops = [...new Set(gr.rows.map(r => r.s.name))], multi = stops.length > 1;
+  return `<section class="lc" data-k="${esc(gr.short)}" style="--c:${(S.meta[gr.short] || {}).color}">
+      <header class="lc-h">${lb(gr.short)}<span class="lc-n">${multi ? `${stops.length} arrêts proches` : esc(stops[0])}</span><span class="lc-w">${I.walk}${fmtDur(gr.w)}</span></header>
+      ${gr.rows.map(g => dirRowHTML(g, rowDeps(g, now, 6), g.walk.duration, now, { stop: multi ? g.s.name : '' })).join('')}</section>`;
+}
+// Liste en éléments à clé : on ne remplace que les cartes qui changent (pas de saut quand on bouge la carte).
+function nearItems(now) {
   const groups = visibleGroups();
   if (!U.near.length) {
-    if (U.loading) return skeletonHTML();
-    return `<div class="empty"><b>Aucun arrêt couvert par ici</b><p>Rien à moins de ${fmtDist(U.R)} dans les réseaux couverts pour l'instant. Déplace la carte, ou cherche où tu vas.</p>${coverageHTML()}</div>`;
+    if (U.loading) return null;
+    return `<div class="empty"><b>Aucun départ par ici</b><p>Déplace la carte ou cherche où tu vas.</p><p class="cov-s">Couvert : ${(N.index?.networks || []).map(n => esc(n.region)).join(' · ')}</p></div>`;
   }
-  if (!groups.length) return `<div class="empty"><b>Rien avec ce filtre</b><p>Cette ligne ou ce mode ne passe pas à proximité.</p><button type="button" class="btn ghost" data-act="nofilter">Tout afficher</button></div>`;
-  return `<div class="list">${groups.map(gr => {
-    const meta = S.meta[gr.short] || {}, g0 = gr.rows[0];
-    const stops = [...new Set(gr.rows.map(r => r.s.name))];
-    return `<section class="lcard" style="--c:${meta.color};--t:${meta.textColor}">
-      <header class="lc-h">${lb(gr.short)}<span class="lc-s"><b>${esc(stops.join(' · '))}</b><small>${modeIcon(modeOf(gr.short))}${modeName(gr.short)}<i class="dotsep"></i>${I.walk}${fmtDur(gr.w)}${g0.walk.source === 'approx' ? '' : ''}</small></span></header>
-      <div class="grp">${gr.rows.map(g => rowHTML(g, now)).join('')}</div></section>`;
-  }).join('')}</div>
-    <p class="hint">${U.places.length} arrêt${U.places.length > 1 ? 's' : ''} à moins de ${fmtDist(U.R)} · ${new Set(U.near.map(g => g.short)).size} lignes · déplace la carte pour voir ailleurs.${U.loading ? ' Chargement…' : ''}</p>`;
+  if (!groups.length) return `<div class="empty"><b>Rien avec ce filtre</b><p>Ce mode ne passe pas tout près.</p><button type="button" class="btn ghost" data-act="nofilter">Tout afficher</button></div>`;
+  return groups.map(gr => ({ k: gr.short, h: lineCardHTML(gr, now) }));
 }
-function skeletonHTML() { return `<div class="list">${[0, 1, 2].map(() => '<div class="lcard sk"><div class="sk-h"><i></i><span></span></div><div class="sk-r"><span></span><b></b></div><div class="sk-r"><span></span><b></b></div></div>').join('')}</div>`; }
-function liveChip(keys) {
-  const now = Date.now(); let live = false;
-  for (const g of U.near) { if (keys && !keys.includes(g.short)) continue; const d = rowDeps(g, now, 1)[0]; if (d && d.rt) { live = true; break; } }
-  if (!live && U.stop) for (const q of U.stop.quays) { if (!S.data[q.short]) continue; const d = departures(q.short, q.sid, now, 2)[0]; if (d && d.rt) { live = true; break; } }
-  return live ? `<span class="chip-live">${I.live}Temps réel</span>` : '<span class="chip-live off" title="Temps réel indisponible ici pour l\'instant : horaires prévus">Horaires prévus</span>';
-}
+function footHTML() { return `<p class="foot"><span class="lg">${I.live}temps réel</span><span>sinon horaire prévu</span>${U.loading ? '<span>· chargement…</span>' : ''}</p>`; }
+function skeletonHTML() { return `<div class="list sk-l">${[0, 1, 2].map(() => '<div class="lc sk"><div class="sk-h"><i></i><span></span></div><div class="sk-r"><span></span><b></b></div></div>').join('')}</div>`; }
 
 /* ================= arrêt touché sur la carte ================= */
 function stopHTML(now) {
@@ -278,10 +300,10 @@ function stopHTML(now) {
   } }
   const W = U.stop.walk?.duration ?? (U.origin ? haversine([U.origin.lat, U.origin.lon], [p.lat, p.lon]) * 1.3 / MB.SPEED : null);
   const gs = [...groups.values()].map(g => ({ ...g, deps: g.deps.sort((a, b) => a.t - b.t).slice(0, 3) })).sort((a, b) => byMode(a.short, b.short) || a.dir - b.dir);
-  if (!gs.length) return missing ? skeletonHTML() : `<div class="empty"><b>Plus de départ prévu à cet arrêt</b><p>Il n'y a plus de passage annoncé pour l'instant.</p><button type="button" class="btn ghost" data-act="close">Retour</button></div>`;
-  return `<div class="list">${gs.map(g => { const a = g.deps[0], v = a && W != null ? nbVerdict(a, W, now) : null; const m = S.meta[g.short] || {};
-      return `<div class="srow" style="--c:${m.color}"><div class="srow-h">${lb(g.short)}<b class="to">${I.arrow}<span>${esc(headOf(g.short, g.dir))}</span></b>${v ? vPill(v) : ''}</div>
-        <div class="srow-d">${g.deps.map(d => `<span class="sd ${d.rt ? 'rt' : ''}"><b>${d.rt ? I.live : ''}${shortWhen(d, now)}</b><small>${minsOf(d.t, now) < 60 ? fmtHM(d.t) + ' · ' : ''}${d.rt ? 'Live' : 'Prévu'}</small>${fin(d)}</span>`).join('')}</div></div>`; }).join('')}</div>`;
+  if (!gs.length) return missing ? skeletonHTML() : `<div class="empty"><b>Plus de départ ici pour l'instant</b><p>Aucun passage annoncé à cet arrêt.</p><button type="button" class="btn ghost" data-act="close">Retour</button></div>`;
+  const byLine = new Map(); for (const g of gs) { if (!byLine.has(g.short)) byLine.set(g.short, []); byLine.get(g.short).push(g); }
+  return `<div class="list">${[...byLine.entries()].map(([k, rows]) => `<section class="lc" style="--c:${(S.meta[k] || {}).color}"><header class="lc-h">${lb(k)}<span class="lc-n">${esc(modeName(k))}</span></header>
+      ${rows.map(g => dirRowHTML(g, g.deps, W, now, { static: true })).join('')}</section>`).join('')}</div>${footHTML()}`;
 }
 function openStop(p) {
   U.stop = { ...p, walk: null }; U.sel = null; render(); syncMap();
@@ -324,11 +346,11 @@ function gmapsLink() { const O = U.origin, D = U.dest; return `https://www.googl
 function destHTML(now) {
   const P = U.plan; if (!P) return '';
   const wd = P.walkDirect;
-  const walkOnly = wd ? `<div class="walkonly">${I.walk}<span><b>${fmtDur(wd.duration)} à pied</b> en marchant directement (${fmtDist(wd.distance)}${wd.source === 'approx' ? ', estimé' : ''})</span></div>` : '';
-  const ext = `<a class="link ext" href="${gmapsLink()}" target="_blank" rel="noopener">${I.ext}Itinéraire avec correspondances</a>`;
-  if (!P.opts.length) return `<div class="empty"><b>Pas de trajet direct depuis ici</b><p>Aucune ligne autour de toi ne va directement à ta destination. Les correspondances ne sont pas encore calculées par Prochain.</p><p>${ext}</p><button type="button" class="btn ghost" data-act="cleardest">Changer de destination</button></div>${walkOnly}`;
+  const walkOnly = wd ? `<div class="walkonly">${I.walk}<span><b>${fmtDur(wd.duration)} à pied</b> si tu marches directement · ${fmtDist(wd.distance)}</span></div>` : '';
+  const ext = `<a class="link ext" href="${gmapsLink()}" target="_blank" rel="noopener">${I.ext}Trajets avec correspondance</a>`;
+  if (!P.opts.length) return `<div class="empty"><b>Pas de ligne directe</b><p>Aucune ligne d'ici ne va directement là-bas. Les correspondances arrivent bientôt.</p><p>${ext}</p><button type="button" class="btn ghost" data-act="cleardest">Autre destination</button></div>${walkOnly}`;
   return `<div class="opts">${P.opts.slice(0, 3).map((op, i) => optHTML(op, i, now)).join('')}</div>${walkOnly}
-    ${P.loading ? '<p class="hint">Calcul des trajets à pied…</p>' : `<p class="hint">Trajets directs ; durée d'après les horaires de la course · Live = estimation temps réel.</p><p class="hint">${ext}</p>`}`;
+    ${P.loading ? '<p class="foot"><span>Calcul des trajets à pied…</span></p>' : `<p class="foot">${ext}</p>`}`;
 }
 function optHTML(op, i, now) {
   const on = i === U.opt, ev = evalOpt(op, now), f = ev.first;
@@ -337,15 +359,15 @@ function optHTML(op, i, now) {
   const after = f ? ev.deps.filter(d => d.t > f.t)[0] : null;
   const slow = U.plan.walkDirect && ev.arrive && now + U.plan.walkDirect.duration * 1000 <= ev.arrive;
   const missed = !f && ev.deps[0];
-  return `<div class="opt ${on ? 'on' : ''}" data-opt="${i}" style="--c:${(S.meta[op.short] || {}).color}" role="button" tabindex="0" aria-pressed="${on}">
-    <div class="opt-h">${lb(op.short)}<b class="to">${I.arrow}<span>${esc(headOf(op.short, op.dir))}</span></b>
-      <span class="opt-tot">${total != null ? `<span class="tm"><b>${total}</b><small>min</small></span><small>arrivée ${fmtHM(ev.arrive)}</small>` : '<span class="tm none">—</span><small>plus de départ</small>'}</span></div>
+  const tot = total != null ? (total < 60 ? `<span class="cd"><b>${total}</b><small>min</small></span>` : `<span class="cd hm"><b>${Math.floor(total / 60)} h ${String(total % 60).padStart(2, '0')}</b></span>`) + `<small>arrivée ${fmtHM(ev.arrive)}</small>` : '<span class="cd none"><b>—</b></span><small>plus de départ</small>';
+  const board = f ? `<b class="${f.rt ? 'rt' : ''}">${f.rt ? I.live : ''}${relWhen(f, now)}</b> · ${fmtHM(f.t)}${fin(f)} ${vPill(f.v)}` : missed ? `Dernier à ${fmtHM(missed.t)} ${vPill(missed.v)}` : 'Plus de départ aujourd\'hui';
+  return `<div class="opt ${on ? 'on' : ''}" data-opt="${i}" role="button" tabindex="0" aria-pressed="${on}">
+    <div class="opt-h">${lb(op.short)}<span class="dir-to"><small>vers</small><b>${esc(headOf(op.short, op.dir))}</b></span><span class="opt-tot">${tot}</span></div>
     <ol class="steps">
       <li>${I.walk}<span><b>${fmtDur(op.walkA.duration)}</b> à pied jusqu'à <b>${esc(op.a.s.name)}</b></span></li>
-      <li class="bus">${lb(op.short, 'xs')}<span>${f ? `Prochain départ <b>${shortWhen(f, now)}</b> (${fmtHM(f.t)}) ${src(f)}${fin(f)} ${vPill(f.v, true)}${after ? `<small>puis ${fmtHM(after.t)}${after.fin ? ' <em class="fin">fin</em>' : ''}</small>` : ''}` : missed ? `Dernier départ ${fmtHM(missed.t)} : ${vPill(missed.v)}` : 'Plus de départ prévu aujourd\'hui'}
-        <small>${Math.max(1, Math.round(ride / 60))} min de trajet · ${ns} arrêt${ns > 1 ? 's' : ''}</small></span></li>
-      <li>${I.flag}<span>Descends à <b>${esc(op.b.s.name)}</b>${op.b.d > 0 ? `, puis ${fmtDur(op.walkB.duration)} à pied` : ''}${f ? ` <small>vers ${fmtHM(f.arr)}</small>` : ''}</span></li>
-    </ol>${slow ? `<p class="opt-warn">${I.walk}Aussi rapide à pied (${fmtDur(U.plan.walkDirect.duration)}).</p>` : ''}</div>`;
+      <li class="ride">${lb(op.short, 'xs')}<span>${board}<small>${after ? `puis ${fmtHM(after.t)}${after.fin ? ' (fin)' : ''} · ` : ''}${Math.max(1, Math.round(ride / 60))} min de trajet · ${ns} arrêt${ns > 1 ? 's' : ''}</small></span></li>
+      <li>${I.flag}<span>Descends à <b>${esc(op.b.s.name)}</b>${op.b.d > 0 ? ` · ${fmtDur(op.walkB.duration)} à pied` : ''}</span></li>
+    </ol>${slow && on ? `<p class="opt-warn">${I.walk}Aussi rapide à pied (${fmtDur(U.plan.walkDirect.duration)}).</p>` : ''}</div>`;
 }
 function fitOpt() {
   if (!U.origin || !U.dest || !U.map) return;
@@ -357,16 +379,16 @@ function fitOpt() {
 /* ================= adresse (repli sans géolocalisation) ================= */
 function askHTML() {
   const last = mbGet('onde-addr');
-  const why = U.geo === 'denied' ? 'La localisation est refusée.' : U.geo === 'unavailable' ? 'Position introuvable.' : '';
+  const why = U.geo === 'denied' ? 'Localisation refusée. ' : U.geo === 'unavailable' ? 'Position introuvable. ' : '';
   return `<div class="ask">
-    ${U.origin ? `<button class="back" type="button" data-act="unask" aria-label="Retour">${I.back}</button>` : ''}
-    <h1>Où es-tu&nbsp;?</h1><p>${why || "On n'a pas encore de point de départ."} Tape une adresse, une gare, un arrêt, un commerce, une école…</p>
+    ${U.origin ? `<button class="back" type="button" data-act="unask" aria-label="Retour">${I.x}</button>` : ''}
+    <h1>Tu pars d'où&nbsp;?</h1><p>${why}Une adresse, une gare, un arrêt ou un lieu.</p>
     <div class="field"><label class="search-in">${I.pin}<input id="addr" type="search" inputmode="search" enterkeyhint="search" autocomplete="street-address" placeholder="Adresse, gare, arrêt, lieu…" aria-label="Ton adresse ou un lieu"></label><div class="results" id="addrRes" role="listbox"></div></div>
     ${last && (!U.origin || U.origin.label !== last.label) ? `<button type="button" class="link" data-act="last">${I.pin}${esc(last.label)}</button>` : ''}
     ${U.geo !== 'denied' && U.origin?.src !== 'gps' && 'geolocation' in navigator && U.origin ? `<button type="button" class="link" data-act="geo">${I.gps}Utiliser ma position</button>` : ''}
   </div>`;
 }
-function pendingHTML() { return `<div class="empty state"><div class="pulse"><i></i><i></i>${I.gps}</div><b>On te localise…</b><p>Autorise la position pour voir les départs autour de toi.</p><button type="button" class="btn ghost" data-act="ask">Indiquer mon adresse</button></div>`; }
+function pendingHTML() { return `<div class="empty state"><div class="pulse"><i></i><i></i>${I.gps}</div><b>On te localise…</b><p>Accepte la localisation pour voir les départs autour de toi.</p><button type="button" class="btn ghost" data-act="ask">Indiquer une adresse</button></div>`; }
 
 /* ================= statut, filtres, rendu ================= */
 let lastSig = '', lastHTML = '';
@@ -376,32 +398,47 @@ function statusHTML(m) {
     const p = U.stop, W = p.walk?.duration;
     const dist = U.origin ? haversine([U.origin.lat, U.origin.lon], [p.lat, p.lon]) : null;
     return `<button class="back" type="button" data-act="close" aria-label="Retour">${I.back}</button>
-      <div class="status-t"><b>${esc(p.name)}</b><span class="st-l">${p.lines.slice(0, 7).map(s => lb(s, 'xs')).join('')}${p.lines.length > 7 ? `<i class="more-n">+${p.lines.length - 7}</i>` : ''}${W != null ? ` · ${fmtDur(W)} à pied` : dist != null ? ` · ${fmtDist(dist)}` : ''}</span></div>${liveChip(p.lines)}`;
+      <div class="status-t"><b>${esc(p.name)}</b><span class="st-l">${p.lines.slice(0, 6).map(s => lb(s, 'xs')).join('')}${p.lines.length > 6 ? `<i class="more-n">+${p.lines.length - 6}</i>` : ''}${W != null ? `<span class="st-w">${I.walk}${fmtDur(W)}</span>` : dist != null ? `<span class="st-w">${fmtDist(dist)}</span>` : ''}</span></div>`;
   }
   if (m === 'dest') {
     const from = U.origin.src === 'gps' ? 'ta position' : U.origin.src === 'pin' ? 'le point sur la carte' : U.origin.label;
     return `<button class="back" type="button" data-act="cleardest" aria-label="Retour aux départs proches">${I.back}</button>
-      <div class="status-t"><b>Vers ${esc(U.dest.label)}</b><span>Depuis ${esc(from)}</span></div>`;
+      <div class="status-t"><b>Vers ${esc(U.dest.label)}</b><span>depuis ${esc(from)}</span></div>`;
   }
   const O = U.origin, pin = O.src === 'pin' || O.src === 'home';
   const far = U.R > NB.R && U.near.length;
   const title = far ? 'Un peu plus loin' : (O.src === 'gps' ? 'Autour de toi' : "Autour d'ici");
-  const where = O.src === 'gps' ? (O.stale ? 'Ta dernière position' : O.label === 'Ma position' ? 'Ta position' : esc(O.label)) : pin ? (O.label === 'Point choisi' ? 'Point choisi sur la carte' : esc(O.label)) : esc(O.label);
-  return `<div class="status-t"><b>${title}</b><button type="button" class="where" data-act="ask" title="Changer de point de départ">${I.pin}<span>${where}</span></button></div>${liveChip()}`;
+  const where = O.src === 'gps' ? (O.stale ? 'Ta dernière position' : O.label === 'Ma position' ? 'Ta position' : esc(O.label)) : pin ? (O.label === 'Point choisi' ? 'Point sur la carte' : esc(O.label)) : esc(O.label);
+  return `<div class="status-t row1"><b>${title}</b><button type="button" class="where" data-act="ask" title="Changer de point de départ">${I.pin}<span>${where}</span></button></div>`;
 }
 function renderStatus(m) {
   const el = $('#status'); const show = m === 'near' || m === 'dest' || m === 'stop';
   el.hidden = !show; if (!show) return;
   const h = statusHTML(m); if (el.dataset.h !== h) { el.innerHTML = h; el.dataset.h = h; }
 }
+// Filtres : les modes d'abord (Tout · Métro · RER · Bus…) ; les lignes n'apparaissent qu'une fois un mode choisi.
 function renderFilters(m) {
   const el = $('#filters'); const keys = [...new Set(U.near.map(g => g.short))];
-  const show = m === 'near' && keys.length > 1; el.hidden = !show; if (!show) return;
   const modes = [...new Set(keys.map(modeOf))].sort((a, b) => MODES[a].o - MODES[b].o);
-  const mchips = modes.length > 1 ? modes.map(md => `<button type="button" class="fchip mode ${U.mfilter === md ? 'on' : ''}" data-mode="${md}" aria-pressed="${U.mfilter === md}">${modeIcon(md)}${MODES[md].n}</button>`).join('') + '<span class="fsep" aria-hidden="true"></span>' : '';
-  const lk = keys.filter(k => !U.mfilter || modeOf(k) === U.mfilter).sort(byMode);
-  const h = mchips + lk.map(k => { const l = S.meta[k]; return `<button type="button" class="fchip ln ${U.filter.has(k) ? 'on' : ''}" data-line="${esc(k)}" style="--c:${l.color};--t:${l.textColor}" aria-pressed="${U.filter.has(k)}"><i class="fdot"></i>${esc(lbl(k))}</button>`; }).join('');
+  const show = m === 'near' && (modes.length > 1 || U.mfilter); el.hidden = !show; if (!show) return;
+  let h = `<button type="button" class="fchip mode ${!U.mfilter ? 'on' : ''}" data-mode="" aria-pressed="${!U.mfilter}">Tout</button>` + modes.map(md => `<button type="button" class="fchip mode ${U.mfilter === md ? 'on' : ''}" data-mode="${md}" aria-pressed="${U.mfilter === md}">${modeIcon(md)}${MODES[md].n}</button>`).join('');
+  if (U.mfilter) { const lk = keys.filter(k => modeOf(k) === U.mfilter).sort(byMode); if (lk.length > 1) h += '<span class="fsep" aria-hidden="true"></span>' + lk.map(k => { const l = S.meta[k]; return `<button type="button" class="fchip ln ${U.filter.has(k) ? 'on' : ''}" data-line="${esc(k)}" style="--c:${l.color};--t:${l.textColor}" aria-pressed="${U.filter.has(k)}">${esc(lbl(k))}</button>`; }).join(''); }
   if (el.dataset.h !== h) { el.innerHTML = h; el.dataset.h = h; }
+}
+const tpl = document.createElement('template');
+const nodeOf = h => { tpl.innerHTML = h.trim(); return tpl.content.firstElementChild; };
+// Mise à jour à clé : on garde les nœuds identiques, on remplace ceux qui changent, on ne fait apparaître que les nouveaux.
+function patchKeyed(list, items) {
+  const old = new Map([...list.children].map(c => [c.dataset.k, c])); let prev = null;
+  for (const it of items) {
+    let el = old.get(it.k);
+    if (el) { old.delete(it.k); if (el._h !== it.h) { const n = nodeOf(it.h); n._h = it.h; el.replaceWith(n); el = n; } }
+    else { el = nodeOf(it.h); el._h = it.h; if (list.childElementCount) el.classList.add('enter'); }
+    const want = prev ? prev.nextElementSibling : list.firstElementChild;
+    if (el !== want) list.insertBefore(el, want);
+    prev = el;
+  }
+  for (const el of old.values()) el.remove();
 }
 function render() {
   const m = mode(), now = Date.now();
@@ -412,7 +449,18 @@ function render() {
     if (lastSig !== 'ask') { panel.innerHTML = askHTML(); lastSig = 'ask'; lastHTML = ''; const inp = $('#addr'); nbSearch(inp, $('#addrRes'), h => { U.followGps = false; setOrigin({ label: h.label, lat: h.lat, lon: h.lon, src: 'addr' }, true); }); if (isDesk() || U.geo !== 'pending') setTimeout(() => inp.focus({ preventScroll: true }), 60); }
     return;
   }
-  const h = m === 'loading' ? skeletonHTML() : m === 'pending' ? pendingHTML() : m === 'stop' ? stopHTML(now) : m === 'dest' ? destHTML(now) : nearHTML(now);
+  if (m === 'near') {
+    const items = nearItems(now);
+    if (Array.isArray(items)) {
+      let list = lastSig === 'near-list' ? panel.querySelector('.list.near') : null;
+      if (!list) { panel.innerHTML = '<div class="list near"></div>' + footHTML(); list = panel.firstElementChild; lastSig = 'near-list'; lastHTML = ''; }
+      patchKeyed(list, items);
+      const f = footHTML(), fe = panel.querySelector('.foot'); if (fe && fe._h !== f) { fe.outerHTML = f; panel.querySelector('.foot')._h = f; }
+      U.opened = null; return;
+    }
+    const h = items || skeletonHTML(); if (h !== lastHTML || lastSig !== 'near') { panel.innerHTML = h; lastHTML = h; lastSig = 'near'; } return;
+  }
+  const h = m === 'loading' ? skeletonHTML() : m === 'pending' ? pendingHTML() : m === 'stop' ? stopHTML(now) : destHTML(now);
   if (h !== lastHTML || lastSig !== m) { panel.innerHTML = h; lastHTML = h; lastSig = m; }
 }
 function scrollPanelTop() { const p = $('#panel'); if (p && p.scrollTop > 0) p.scrollTo({ top: 0, behavior: 'smooth' }); }
@@ -427,11 +475,11 @@ $('#sheet').addEventListener('click', e => {
   if (act === 'cleardest') return clearDest();
   if (act === 'nofilter') { U.filter.clear(); U.mfilter = null; render(); syncMap(); return; }
   if (act === 'reload') { location.reload(); return; }
-  const mc = t.closest('.fchip[data-mode]'); if (mc) { const md = mc.dataset.mode; U.mfilter = U.mfilter === md ? null : md; for (const k of [...U.filter]) if (U.mfilter && modeOf(k) !== U.mfilter) U.filter.delete(k); render(); syncMap(); return; }
+  const mc = t.closest('.fchip[data-mode]'); if (mc) { const md = mc.dataset.mode; U.mfilter = !md || U.mfilter === md ? null : md; U.filter.clear(); render(); syncMap(); scrollPanelTop(); return; }
   const chip = t.closest('.fchip[data-line]');
   if (chip) { const s = chip.dataset.line; if (U.filter.has(s)) U.filter.delete(s); else U.filter.add(s); render(); syncMap(); return; }
   const st = t.closest('[data-stopsid]'); if (st) { const v = st.dataset.stopsid, i = v.lastIndexOf('|'), sh = v.slice(0, i), sid = v.slice(i + 1); const p = U.mapPlaces.find(p => p.quays.some(q => q.short === sh && q.sid === sid)); if (p) openStop(p); return; }
-  const rh = t.closest('.row-h'); if (rh) { const k = rh.parentElement.dataset.key; U.sel = U.sel === k ? null : k; render(); syncMap(); if (U.sel) { fitSel(); if (!isDesk() && U.sheet !== 'full') setSheet('full'); } return; }
+  const rh = t.closest('button.dir-h'); if (rh) { const k = rh.parentElement.dataset.key; U.sel = U.sel === k ? null : k; U.opened = U.sel; render(); syncMap(); if (U.sel) { fitSel(); if (!isDesk() && U.sheet !== 'full') setSheet('full'); } return; }
   const op = t.closest('.opt'); if (op) { U.opt = +op.dataset.opt; render(); syncMap(); fitOpt(); }
 });
 $('#sheet').addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('opt')) { e.preventDefault(); e.target.click(); } });
@@ -603,7 +651,7 @@ function addOverlays() {
   map.addLayer({ id: 'gpsacc', type: 'fill', source: 'gpsacc', paint: { 'fill-color': '#1a73e8', 'fill-opacity': 0.12 } });
   map.addLayer({ id: 'gpsacc-ol', type: 'line', source: 'gpsacc', paint: { 'line-color': '#1a73e8', 'line-opacity': 0.3, 'line-width': 1 } });
   map.addLayer({ id: 'lines-case', type: 'line', source: 'lines', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': dark ? '#0b0e14' : '#ffffff', 'line-width': ['interpolate', ['linear'], ['zoom'], 11, rail(4.5, 3), 15, rail(8, 6), 18, rail(13, 10)], 'line-opacity': U.sat ? .5 : .9 } });
-  map.addLayer({ id: 'lines', type: 'line', source: 'lines', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['get', 'color'], 'line-width': ['interpolate', ['linear'], ['zoom'], 11, rail(2.2, 1.4), 15, rail(4.6, 3.2), 18, rail(8, 5.5)], 'line-opacity': .8 } });
+  map.addLayer({ id: 'lines', type: 'line', source: 'lines', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['get', 'color'], 'line-width': ['interpolate', ['linear'], ['zoom'], 11, rail(2.2, 1.2), 15, rail(4.4, 2.6), 18, rail(7.5, 4.8)], 'line-opacity': .55 } });
   map.addLayer({ id: 'focus-case', type: 'line', source: 'focus', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': dark ? '#0b0e14' : '#ffffff', 'line-width': W(6, 10, 15) } });
   map.addLayer({ id: 'focus', type: 'line', source: 'focus', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': ['get', 'color'], 'line-width': W(3.5, 6.5, 10) } });
   map.addLayer({ id: 'walk', type: 'line', source: 'walk', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#1a73e8', 'line-width': W(3, 4.5, 6), 'line-dasharray': [0.1, 1.8] } });
@@ -644,7 +692,7 @@ function syncMap() {
   const me = $('#btnMe'); if (me) me.classList.toggle('on', !!(U.followGps && U.gps));
   const acc = U.gps ? Math.min(Math.max(U.gps.acc || 0, 18), 250) : 0;
   map.getSource('gpsacc').setData(U.gps && acc ? circleFC(U.gps.lat, U.gps.lon, acc) : EMPTY);
-  map.getSource('radius').setData(U.origin && !U.dest && !U.stop && U.near.length && U.R <= 2500 ? circleFC(U.origin.lat, U.origin.lon, U.R) : EMPTY);
+  map.getSource('radius').setData(EMPTY); // pas de cercle : moins de bruit sur la carte
   const away = U.gps && (!U.origin || U.origin.src !== 'gps' || haversine([U.origin.lat, U.origin.lon], [U.gps.lat, U.gps.lon]) > 22);
   if (away) { if (!gpsMk) { const el = document.createElement('div'); el.className = 'gps-dot'; el.title = 'Ta position réelle'; gpsMk = new maplibregl.Marker({ element: el }).setLngLat([U.gps.lon, U.gps.lat]).addTo(map); el.addEventListener('click', e => { e.stopPropagation(); regps(); }); } gpsMk.setLngLat([U.gps.lon, U.gps.lat]); }
   else if (gpsMk) { gpsMk.remove(); gpsMk = null; }
@@ -674,7 +722,7 @@ function syncMap() {
   map.setFilter('stops-sel', ['==', ['get', 'i'], selI]);
   const flt = U.filter.size ? [...U.filter] : U.mfilter ? [...new Set(U.near.map(g => g.short))].filter(k => modeOf(k) === U.mfilter) : null;
   if (!dim && flt) { map.setPaintProperty('lines', 'line-opacity', ['case', ['in', ['get', 'short'], ['literal', flt]], .95, .12]); map.setPaintProperty('lines-case', 'line-opacity', .35); }
-  else { map.setPaintProperty('lines', 'line-opacity', dim ? (dim === '-' ? .2 : ['case', ['==', ['get', 'key'], dim], .95, .2]) : .8); map.setPaintProperty('lines-case', 'line-opacity', dim ? .35 : (U.sat ? .5 : .9)); }
+  else { map.setPaintProperty('lines', 'line-opacity', dim ? (dim === '-' ? .15 : ['case', ['==', ['get', 'key'], dim], .95, .15]) : .55); map.setPaintProperty('lines-case', 'line-opacity', dim ? .35 : (U.sat ? .5 : .9)); }
   U.focusLines = !U.stop && U.dest && U.plan?.opts[U.opt] ? new Set([U.plan.opts[U.opt].short + '|' + U.plan.opts[U.opt].dir]) : !U.stop && U.sel ? new Set([U.sel]) : (!U.stop && flt ? new Set(flt.flatMap(s => [s + '|0', s + '|1'])) : null);
 }
 /* ----- le rond suit le centre de la carte : déplacer la carte = nouvel endroit ----- */
