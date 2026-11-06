@@ -588,10 +588,14 @@ async function initMap() {
       dragRotate: false, pitchWithRotate: false, touchPitch: false, maxPitch: 0, renderWorldCopies: false,
       attributionControl: { compact: true }, fadeDuration: 150, maxBounds: FRANCE,
       padding: isDesk() ? undefined : { top: 0, right: 0, bottom: currentSheetH(), left: 0 },
+      // zoom autour du centre (le rond #mePin) : la position choisie ne bouge pas
+      scrollZoom: { around: 'center' },
+      touchZoomRotate: { around: 'center' },
+      doubleClickZoom: false,
     });
   } catch (e) { return mapFail('Ton navigateur ne peut pas afficher la carte (WebGL).'); }
   map.touchZoomRotate.disableRotation(); map.keyboard.disableRotation();
-  map.dragPan.enable(); map.scrollZoom.enable(); map.boxZoom.enable(); map.doubleClickZoom.enable();
+  map.dragPan.enable(); map.boxZoom.enable();
   map.dragRotate.disable(); map.touchPitch.disable();
   map.getCanvas().style.cursor = 'grab';
   map.once('load', () => {
@@ -710,9 +714,18 @@ function addOverlays() {
 }
 function bindMapEvents(map) {
   const pick = e => { const f = map.queryRenderedFeatures(e.point, { layers: ['stops-hit', 'stops-lbl'] })[0]; if (!f) return false; const p = U.mapPlaces[f.properties.i]; if (p) openStop(p); return true; };
-  let dragging = false;
+  let dragging = false, panOrigin = false;
   const canvas = map.getCanvas();
   map.on('click', e => { pick(e); });
+  // double-clic / double-tap : zoom sur place (centre = le rond), jamais vers le curseur
+  map.on('dblclick', e => {
+    if (U.camLock) return;
+    if (e.originalEvent && typeof e.originalEvent.preventDefault === 'function') e.originalEvent.preventDefault();
+    const z = map.getZoom(), max = map.getMaxZoom();
+    if (z >= max - 1e-6) return;
+    U.camLock = true;
+    map.easeTo({ zoom: Math.min(max, z + 1), duration: 280 });
+  });
   // ne pas écraser le curseur grab/grabbing pendant un drag (sinon le pan desktop paraît cassé)
   map.on('mousemove', e => {
     if (dragging || U.camLock) return;
@@ -720,20 +733,23 @@ function bindMapEvents(map) {
     const f = map.queryRenderedFeatures(e.point, { layers: ['stops-hit', 'stops-lbl'] });
     canvas.style.cursor = f.length ? 'pointer' : 'grab';
   });
-  // seul un geste de l'utilisateur déplace l'origine (les animations de caméra/marges programmées ne la touchent pas)
+  // seul un pan (drag) déplace l'origine ; un zoom (molette / pincement / double-clic) laisse le rond en place
   map.on('dragstart', e => {
     if (!e.originalEvent) return;
-    dragging = true; U.userMove = true; U.followGps = false;
+    dragging = true; panOrigin = true; U.userMove = true; U.followGps = false;
     map.getContainer().parentElement.classList.add('moving');
     canvas.style.cursor = 'grabbing';
     clearTimeout(pinT); // pas de recalcul des bus en plein geste
   });
   map.on('movestart', e => {
-    if (e.originalEvent) { U.userMove = true; U.followGps = false; map.getContainer().parentElement.classList.add('moving'); }
+    if (e.originalEvent && dragging) {
+      U.userMove = true; U.followGps = false;
+      map.getContainer().parentElement.classList.add('moving');
+    }
   });
   map.on('move', () => {
-    // mémoriser le centre pendant le geste, sans lancer computeNear (trop lourd → à-coups)
-    if (U.userMove && !U.camLock) {
+    // mémoriser le centre pendant le pan seulement (pas pendant un zoom)
+    if (panOrigin && !U.camLock) {
       const c = map.getCenter();
       U.pinPend = { lat: +c.lat.toFixed(6), lon: +c.lng.toFixed(6) };
     }
@@ -742,7 +758,7 @@ function bindMapEvents(map) {
   map.on('moveend', () => {
     map.getContainer().parentElement.classList.remove('moving');
     U.camLock = false;
-    if (U.userMove) { U.userMove = false; schedulePin(true); }
+    if (panOrigin) { panOrigin = false; U.userMove = false; schedulePin(true); }
   });
 }
 let destMk = null, gpsMk = null, linesSig = '';
