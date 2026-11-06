@@ -331,3 +331,5 @@ button.dir-h:hover .chev{opacity:.8}
 .dir.on{background:color-mix(in srgb,var(--hover) 45%,transparent)}
 .foot{justify-content:center;margin-top:16px}
 .app.drag .fab-me{transition:none}
+.cd small.dm{align-self:center;margin-right:5px;font-size:11.5px;text-transform:none}
+.foot .warn{flex-basis:100%;text-align:center;color:var(--miss,#c5221f);font-weight:600}

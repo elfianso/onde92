@@ -92,13 +92,13 @@ function stateAt(v, now) {
   const seg = t[i + 1] - t[i]; const f = seg > 0 ? Math.min(1, Math.max(0, (now - t[i]) / seg)) : 1;
   return { i, f, dist: v.p.dist[i] + (v.p.dist[i + 1] - v.p.dist[i]) * f };
 }
-function theoJourneys(L, now) {
+function theoJourneys(L, now, slack = 60e3) { // slack : courses terminées (à l'horaire) depuis moins de `slack` gardées (retards temps réel)
   const out = []; const td = parisParts(now).ymd;
   for (const day of [addDays(td, -1), td, addDays(td, 1)]) {
     const mid = midnight(day), svcs = L.activeSvc(day);
     for (const t of L.tripObjs) {
       if (!svcs.has(t.svc)) continue;
-      const end = mid + t.times[t.times.length - 1] * 1000; if (end < now - 60e3 || mid + t.times[0] * 1000 > now + 26 * 3600e3) continue;
+      const end = mid + t.times[t.times.length - 1] * 1000; if (end < now - slack || mid + t.times[0] * 1000 > now + 26 * 3600e3) continue;
       out.push({ id: 'T' + t.tid + day, p: t.p, tms: t.times.map(x => mid + x * 1000), rt: false, trip: t, day, headsign: t.p.headsign, delay: 0 });
     }
   }
@@ -195,19 +195,30 @@ function journeys(short, force) {
 // GTFS-RT (TripUpdates) : chaque course connue reçoit ses heures estimées (retard propagé d'arrêt en arrêt).
 // R.byTrip : clé course (|jour) -> [[stop_id, heure_epoch_s, retard_s|null], …]
 function tripRtJourneys(L, R, now) {
-  const out = theoJourneys(L, now);
+  const out = theoJourneys(L, now, 3 * 3600e3), keep = [];
   for (const v of out) {
-    const u = R.byTrip.get(v.trip.tid + '|' + v.day) || (R.noDate ? R.byTrip.get(v.trip.tid) : null); if (!u) continue;
-    const P = v.p, n = P.stops.length, del = new Array(n).fill(null);
-    if (R.noDate) { const k0 = P.stopIndex.get(u[0][0]); if (k0 == null || Math.abs(u[0][1] * 1000 - v.tms[k0]) > 3 * 3600e3) continue; }
-    for (const [sid, t, d] of u) { const k = P.stopIndex.get(sid); if (k == null) continue; del[k] = d != null ? d * 1000 : (t ? t * 1000 - v.tms[k] : 0); }
-    let first = del.findIndex(x => x != null); if (first < 0) continue;
-    let cur = del[first]; const aimed = v.tms.slice();
+    const e = R.byTrip.get(v.trip.tid + '|' + v.day) || (R.noDate ? R.byTrip.get(v.trip.tid) : null);
+    if (!e) { if (v.tms[v.tms.length - 1] >= now - 60e3) keep.push(v); continue; }
+    const u = e.u || e; if (e.cancelled) { v.cancelled = true; v.rt = true; keep.push(v); continue; }
+    const P = v.p, n = P.stops.length, del = new Array(n).fill(null), exact = new Array(n).fill(false), skip = new Array(n).fill(false);
+    let off0 = null, bad = false;
+    for (const [sid, t, d, sk] of u) {
+      const k = P.stopIndex.get(sid); if (k == null) continue;
+      if (sk) { skip[k] = true; continue; }
+      // l'heure absolue prime sur le retard ; contrôle de cohérence : un écart > 3 h ou un retard annoncé contredit = mauvaise course (n° de train réutilisé…)
+      const dt = t ? t * 1000 - v.tms[k] : d * 1000;
+      if (Math.abs(dt) > 3 * 3600e3 || (t && d != null && Math.abs(dt - d * 1000) > 20 * 60e3)) { bad = true; break; }
+      del[k] = dt; exact[k] = !!t; if (off0 == null) off0 = dt;
+    }
+    if (bad || off0 == null) { if (v.tms[v.tms.length - 1] >= now - 60e3) keep.push(v); continue; }
+    const first = del.findIndex(x => x != null), aimed = v.tms.slice(); let cur = del[first];
     for (let k = 0; k < n; k++) { if (del[k] != null) cur = del[k]; v.tms[k] = aimed[k] + (k < first ? del[first] : cur); }
-    for (let k = 1; k < n; k++) if (v.tms[k] < v.tms[k - 1]) v.tms[k] = v.tms[k - 1];
-    v.aimed = aimed; v.rt = true; v.delay = cur;
+    // heures interpolées gardées dans l'ordre ; les heures annoncées par le flux restent telles quelles
+    for (let k = 1; k < n; k++) if (!exact[k] && v.tms[k] < v.tms[k - 1]) v.tms[k] = v.tms[k - 1];
+    v.aimed = aimed; v.rt = true; v.delay = cur; v.skip = skip.some(Boolean) ? skip : null;
+    if (v.tms[n - 1] >= now - 60e3) keep.push(v);
   }
-  return out;
+  return keep;
 }
 function running(short, now = Date.now()) {
   const out = [];
@@ -218,10 +229,10 @@ function running(short, now = Date.now()) {
 // Chaque départ porte la course GTFS rattachée (trip, k = rang de l'arrêt dans sa variante, day = journée de service)
 // et `fin` = dernier passage de la soirée à ce quai dans ce sens (voir isFin).
 function departures(short, stopId, now = Date.now(), n = 4) {
-  const L = S.data[short]; const res = []; let rtMax = 0; const used = new Set(); const R = S.rt[short];
+  const L = S.data[short]; const res = []; const rtMax = [0, 0]; const used = new Set(); const R = S.rt[short];
   if (R && R.kind === 'trips' && R.byTrip) { // GTFS-RT : heures estimées des courses connues, horaires prévus sinon
     for (const v of journeys(short)) {
-      const k = v.p.stopIndex.get(stopId); if (k == null || k === v.p.stops.length - 1) continue;
+      const k = v.p.stopIndex.get(stopId); if (k == null || k === v.p.stops.length - 1 || v.cancelled || v.skip?.[k]) continue;
       const t = v.tms[k]; if (t < now - 30e3) continue;
       res.push({ t, rt: v.rt, aim: v.aimed ? v.aimed[k] : null, delay: v.aimed ? t - v.aimed[k] : 0, headsign: v.headsign, dir: v.p.dir, trip: v.trip, k, day: v.day });
     }
@@ -231,16 +242,21 @@ function departures(short, stopId, now = Date.now(), n = 4) {
   const dirOf = pr => { const ds = L.dirsAt?.get(stopId); if (ds && ds.size === 1) return [...ds][0]; const nn = pr.destName ? norm(pr.destName) : ''; const p = nn && L.patterns.find(p => (!ds || ds.has(p.dir)) && (norm(p.headsign).includes(nn) || nn.includes(norm(p.headsign)))); return p ? p.dir : (L.main[0].stopIndex.has(stopId) ? 0 : 1); };
   if (raw && raw.length) {
     const js = journeys(short);
+    const here = L.stops[stopId], hereN = here ? norm(here.name) : '';
     for (const pr of raw) {
       if (pr.e < now - 30e3 || pr.cancelled) continue;
+      // arrivée au terminus (ex. métro 11 « vers Châtelet » à Châtelet) : pas un départ que l'on peut prendre
+      if (!L.dirsAt?.has(stopId) || (pr.dest && pr.dest === stopId)) continue;
+      if (pr.destName && hereN && norm(pr.destName) === hereN) continue;
       // course théorique la plus proche pour ce passage (retard affiché, dédoublonnage)
       let bv = null, bd = Infinity; for (const v of js) { const k = v.p.stopIndex.get(stopId); if (k == null || !v.aimed) continue; const d = Math.abs(v.tms[k] - pr.e); if (d < bd && d < 120e3) { bd = d; bv = v; } }
       const k = bv ? bv.p.stopIndex.get(stopId) : null;
       if (bv?.trip) used.add(bv.trip.tid + bv.day);
       const pat = L.patterns.find(p => p.stops[p.stops.length - 1] === pr.dest);
       const tk = bv?.trip ? bv.trip.p.stopIndex.get(stopId) : null;
-      res.push({ t: pr.e, rt: true, aim: bv ? bv.aimed[k] : null, delay: bv ? pr.e - bv.aimed[k] : 0, headsign: pat ? pat.headsign : (pr.destName || ''), dir: pat ? pat.dir : dirOf(pr), prox: pr.prox, trip: tk != null ? bv.trip : null, k: tk, day: tk != null ? bv.day : null });
-      rtMax = Math.max(rtMax, pr.e);
+      const dir = pat && (!L.dirsAt?.get(stopId) || L.dirsAt.get(stopId).has(pat.dir)) ? pat.dir : dirOf(pr);
+      res.push({ t: pr.e, rt: true, aim: bv ? bv.aimed[k] : null, delay: bv ? pr.e - bv.aimed[k] : 0, headsign: pat ? pat.headsign : (pr.destName || ''), dir, prox: pr.prox, trip: tk != null ? bv.trip : null, k: tk, day: tk != null ? bv.day : null });
+      rtMax[dir] = Math.max(rtMax[dir], pr.e);
     }
   } else if (isLive(short) && R.kind !== 'stops') { // flux « ligne » complet ; un flux « arrêt » ne dit rien des autres arrêts
     for (const v of journeys(short)) {
@@ -249,7 +265,7 @@ function departures(short, stopId, now = Date.now(), n = 4) {
       if (v.trip) used.add(v.trip.tid + v.day);
       const tk = v.trip ? v.trip.p.stopIndex.get(stopId) : null;
       res.push({ t, rt: true, aim: v.aimed?.[k], delay: v.aimed ? t - v.aimed[k] : 0, headsign: v.headsign, cancelled: v.cancelled, dir: v.p.dir, trip: tk != null ? v.trip : null, k: tk, day: tk != null ? v.day : null });
-      rtMax = Math.max(rtMax, t);
+      rtMax[v.p.dir] = Math.max(rtMax[v.p.dir], t);
     }
   }
   const td = parisParts(now).ymd;
@@ -258,7 +274,7 @@ function departures(short, stopId, now = Date.now(), n = 4) {
     for (const tr of L.tripObjs) {
       if (!svcs.has(tr.svc) || used.has(tr.tid + day)) continue;
       const k = tr.p.stopIndex.get(stopId); if (k == null || k === tr.p.stops.length - 1) continue;
-      const t = mid + tr.times[k] * 1000; if (t < now - 30e3 || (rtMax && t <= rtMax + 60e3)) continue;
+      const t = mid + tr.times[k] * 1000; if (t < now - 30e3 || (rtMax[tr.p.dir] && t <= rtMax[tr.p.dir] + 60e3)) continue;
       res.push({ t, rt: false, headsign: tr.p.headsign, dir: tr.p.dir, trip: tr, k, day });
     }
   }

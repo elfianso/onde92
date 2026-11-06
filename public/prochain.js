@@ -54,8 +54,10 @@ function bigWhen(d, now, dim) {
   if (d.t - now < 45e3) return `<span class="${c} now">${lv}<b>maintenant</b></span>`;
   const m = minsOf(d.t, now);
   if (m < 1) return `<span class="${c}">${lv}<b>&lt;1</b><small>min</small></span>`;
-  return m < 60 ? `<span class="${c}">${lv}<b>${m}</b><small>min</small></span>` : `<span class="${c} hm">${lv}<b>${fmtHM(d.t)}</b></span>`;
+  return m < 60 ? `<span class="${c}">${lv}<b>${m}</b><small>min</small></span>` : `<span class="${c} hm">${lv}${dayTag(d.t, now)}<b>${fmtHM(d.t)}</b></span>`;
 }
+// « demain » devant une heure qui tombe un autre jour (ex. 23:10 → premier départ à 05:32)
+const dayTag = (t, now) => t - now > 3 * 3600e3 && parisParts(t).ymd !== parisParts(now).ymd ? '<small class="dm">demain</small>' : '';
 const smallWhen = (d, now) => d.t - now < 60e3 ? '&lt;1' : minsOf(d.t, now) < 60 ? String(minsOf(d.t, now)) : fmtHM(d.t);
 const relWhen = (d, now) => d.t - now < 45e3 ? 'maintenant' : minsOf(d.t, now) < 60 ? 'dans ' + Math.max(1, minsOf(d.t, now)) + ' min' : 'dans ' + Math.floor(minsOf(d.t, now) / 60) + ' h ' + String(minsOf(d.t, now) % 60).padStart(2, '0');
 // Les suivants, en petit : « puis 12 · 19 min »
@@ -253,7 +255,7 @@ function verdictLine(ds, bi, W, now) {
   if (v.k === 'ok') return { html: `<span class="v ok">Tu l'as</span><span>${v.left < 90e3 ? 'pars maintenant' : 'pars à ' + fmtHM(v.leaveBy)}</span>${skipped}`, miss: false };
   if (v.k === 'tight') return { html: `<span class="v tight">Juste</span><span>presse le pas</span>${skipped}`, miss: false };
   const nx = ds.find(d => nbVerdict(d, W, now).k !== 'miss');
-  return { html: `<span class="v miss">Trop tard</span>${nx ? `<span>suivant ${minsOf(nx.t, now) < 60 ? relWhen(nx, now) : 'à ' + fmtHM(nx.t)}</span>` : ''}`, miss: true };
+  return { html: `<span class="v miss">Trop tard</span>${nx ? `<span>suivant ${minsOf(nx.t, now) < 60 ? relWhen(nx, now) : (dayTag(nx.t, now) ? 'demain ' : '') + 'à ' + fmtHM(nx.t)}</span>` : ''}`, miss: true };
 }
 // Un sens d'une ligne : « vers Terminus » à gauche, gros compte à rebours à droite, les suivants dessous.
 function dirRowHTML(g, ds, W, now, o = {}) {
@@ -295,7 +297,9 @@ function nearItems(now) {
   if (!groups.length) return `<div class="empty"><b>Pas de ${esc((MODES[U.mfilter]?.n || 'ligne').toLowerCase())} tout près</b><p>Aucune ligne de ce type ne passe autour du rond.</p><button type="button" class="btn ghost" data-act="nofilter">Voir tous les départs</button></div>`;
   return groups.map(gr => ({ k: gr.short, h: lineCardHTML(gr, now) }));
 }
-function footHTML() { return `<p class="foot"><span class="lg">${I.live}en vert : temps réel</span><span>· le reste : horaire prévu</span></p>`; }
+// Données horaires périmées (fenêtre GTFS dépassée) : on le dit plutôt que d'afficher « plus de bus ».
+function staleNets() { const t = todayYmd(); return (N.index?.networks || []).filter(n => n.window && n.window[1] && t > n.window[1]).map(n => n.name); }
+function footHTML() { const st = staleNets(); return `<p class="foot"><span class="lg">${I.live}en vert : temps réel</span><span>· le reste : horaire prévu</span>${st.length ? `<span class="warn">Horaires prévus à mettre à jour : ${esc(st.join(', '))}</span>` : ''}</p>`; }
 function skeletonHTML(msg = 'On cherche les départs autour de toi…') { return `<p class="sk-msg">${msg}</p><div class="list sk-l">${[0, 1, 2].map(() => '<div class="lc sk"><div class="sk-h"><i></i><span></span></div><div class="sk-r"><span></span><b></b></div></div>').join('')}</div>`; }
 
 /* ================= arrêt touché sur la carte ================= */
@@ -529,19 +533,23 @@ async function pollNear() {
   if (!jobs.length) return;
   await Promise.all(jobs); applyRT(); render(); syncMap();
 }
+// Fraîcheur jugée sur l'heure de collecte côté serveur (fetchedAt), pas sur l'heure de réception : une réponse
+// servie par le cache CDN peut avoir plusieurs minutes. Au-delà, on revient aux horaires prévus.
+const FRESH = { sm: 8 * 60e3, et: 16 * 60e3, gt: 4 * 60e3 };
+const ageOf = (at, r, now) => now - Math.min(at, Date.parse(r && r.fetchedAt) || at);
 function applyRT() {
-  const now = Date.now(), fresh = 6 * 60e3, sm = new Map();
-  for (const [, { at, r }] of RTP.sm) { if (now - at > fresh || r.mode !== 'temps-reel') continue;
+  const now = Date.now(), sm = new Map();
+  for (const [, { at, r }] of RTP.sm) { if (ageOf(at, r, now) > FRESH.sm || r.mode !== 'temps-reel') continue;
     for (const [stop, line, destRef, dest, t, , canc] of r.visits) { const k = 'idfm:' + line; if (!S.data[k]) continue; let a = sm.get(k); if (!a) sm.set(k, a = { fetchedAt: r.fetchedAt, journeys: [] });
       a.journeys.push({ dest, destRef, calls: [{ stop, ed: t, st: canc ? 'cancelled' : null }] }); } }
   const gt = new Map();
-  for (const [net, { at, r }] of RTP.gt) { if (now - at > fresh || r.mode !== 'temps-reel') continue;
-    const by = new Map(); let noDate = false; for (const [tid, date, u] of r.trips) { if (!date) noDate = true; by.set(date ? tid + '|' + date : tid, u); }
+  for (const [net, { at, r }] of RTP.gt) { if (ageOf(at, r, now) > FRESH.gt || r.mode !== 'temps-reel') continue;
+    const by = new Map(); let noDate = false; for (const [tid, date, u, canc] of r.trips) { if (!date) noDate = true; by.set(date ? tid + '|' + date : tid, canc ? { cancelled: true } : u); }
     gt.set(net, { mode: 'temps-reel', kind: 'trips', byTrip: by, noDate, fetchedAt: r.fetchedAt }); }
   for (const k of Object.keys(S.data)) {
     if (!k.includes(':')) continue; const net = k.split(':')[0]; let R = null;
     const et = RTP.et.get(k);
-    if (et && now - et.at < fresh && et.r.mode === 'temps-reel') R = { ...et.r, kind: 'line' };
+    if (et && ageOf(et.at, et.r, now) < FRESH.et && et.r.mode === 'temps-reel') R = { ...et.r, kind: 'line' };
     else if (sm.has(k)) R = { mode: 'temps-reel', kind: 'stops', ...sm.get(k) };
     else if (gt.has(net)) R = gt.get(net);
     if (R) S.rt[k] = R; else delete S.rt[k];
