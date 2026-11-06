@@ -107,7 +107,17 @@ http.createServer(async (req, res) => {
     let m;
     if ((m = /^\/api\/rt\/(\d{3})$/.exec(p))) { const r = await realtime(m[1]); return send(res, r.status, r.body, undefined, { 'Cache-Control': 'no-store' }, req); }
     if (p === '/api/geocode' || p === '/api/walk') { const r = await (p === '/api/walk' ? core.walkRoute : core.geocodeRoute)(u.searchParams); return send(res, r.status, r.body, undefined, { 'Cache-Control': r.cache.replace(/, s-maxage=\d+/, '') }, req); }
-    if (p.startsWith('/data/')) { const f = path.join(gtfs.dir, path.basename(p)); return serveFile(req, res, f, 'public, max-age=3600'); }
+    if (p.startsWith('/data/')) {
+      const rel = decodeURIComponent(p.slice(6));
+      if (!rel || rel.includes('..') || path.isAbsolute(rel)) return send(res, 403, { error: 'forbidden' });
+      const nested = path.join(ROOT, 'public', 'data', rel);
+      if (rel.includes(path.sep) || rel.includes('/')) {
+        if (!nested.startsWith(path.join(ROOT, 'public', 'data'))) return send(res, 403, { error: 'forbidden' });
+        return serveFile(req, res, nested, 'public, max-age=3600');
+      }
+      const f = path.join(gtfs.dir, path.basename(p));
+      return serveFile(req, res, f, 'public, max-age=3600');
+    }
     let f = path.normalize(path.join(ROOT, 'public', p));
     if (!f.startsWith(path.join(ROOT, 'public'))) return send(res, 403, { error: 'forbidden' });
     if (p === '/' || !path.extname(p)) f = path.join(ROOT, 'public/index.html');

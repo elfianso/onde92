@@ -591,10 +591,21 @@ async function initMap() {
     });
   } catch (e) { return mapFail('Ton navigateur ne peut pas afficher la carte (WebGL).'); }
   map.touchZoomRotate.disableRotation(); map.keyboard.disableRotation();
-  map.once('load', () => { if (map.getContainer().clientWidth < 600) map.getContainer().querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show'); });
+  map.dragPan.enable(); map.scrollZoom.enable(); map.boxZoom.enable(); map.doubleClickZoom.enable();
+  map.dragRotate.disable(); map.touchPitch.disable();
+  map.getCanvas().style.cursor = 'grab';
+  map.once('load', () => {
+    map.resize();
+    if (map.getContainer().clientWidth < 600) map.getContainer().querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show');
+  });
   map.on('error', ev => { if (ev && ev.error && /webgl/i.test(String(ev.error.message))) mapFail('Carte indisponible (WebGL).'); });
   map.on('style.load', () => { U.styleReady = true; addOverlays(); });
   map.on('styleimagemissing', e => { if (/^b:/.test(e.id) && !map.hasImage(e.id)) { const b = badgeImage(e.id.slice(2)); map.addImage(e.id, b.img, { pixelRatio: b.r }); } });
+  // le conteneur change de taille (panneau latéral / fenêtre) : sans resize, le drag rate le canvas
+  if (typeof ResizeObserver !== 'undefined') {
+    let rt = null;
+    new ResizeObserver(() => { clearTimeout(rt); rt = setTimeout(() => { if (U.map) U.map.resize(); }, 60); }).observe(map.getContainer());
+  }
   bindMapEvents(map);
   busLoop();
 }
@@ -699,12 +710,40 @@ function addOverlays() {
 }
 function bindMapEvents(map) {
   const pick = e => { const f = map.queryRenderedFeatures(e.point, { layers: ['stops-hit', 'stops-lbl'] })[0]; if (!f) return false; const p = U.mapPlaces[f.properties.i]; if (p) openStop(p); return true; };
+  let dragging = false;
+  const canvas = map.getCanvas();
   map.on('click', e => { pick(e); });
-  map.on('mousemove', e => { if (!map.getLayer('stops-hit')) return; const f = map.queryRenderedFeatures(e.point, { layers: ['stops-hit', 'stops-lbl'] }); map.getCanvas().style.cursor = f.length ? 'pointer' : ''; });
+  // ne pas écraser le curseur grab/grabbing pendant un drag (sinon le pan desktop paraît cassé)
+  map.on('mousemove', e => {
+    if (dragging || U.camLock) return;
+    if (!map.getLayer('stops-hit')) { canvas.style.cursor = 'grab'; return; }
+    const f = map.queryRenderedFeatures(e.point, { layers: ['stops-hit', 'stops-lbl'] });
+    canvas.style.cursor = f.length ? 'pointer' : 'grab';
+  });
   // seul un geste de l'utilisateur déplace l'origine (les animations de caméra/marges programmées ne la touchent pas)
-  map.on('movestart', e => { if (e.originalEvent) { U.userMove = true; U.followGps = false; map.getContainer().parentElement.classList.add('moving'); } });
-  map.on('move', () => { if (U.userMove && !U.camLock) schedulePin(false); });
-  map.on('moveend', () => { map.getContainer().parentElement.classList.remove('moving'); U.camLock = false; if (U.userMove) { U.userMove = false; schedulePin(true); } });
+  map.on('dragstart', e => {
+    if (!e.originalEvent) return;
+    dragging = true; U.userMove = true; U.followGps = false;
+    map.getContainer().parentElement.classList.add('moving');
+    canvas.style.cursor = 'grabbing';
+    clearTimeout(pinT); // pas de recalcul des bus en plein geste
+  });
+  map.on('movestart', e => {
+    if (e.originalEvent) { U.userMove = true; U.followGps = false; map.getContainer().parentElement.classList.add('moving'); }
+  });
+  map.on('move', () => {
+    // mémoriser le centre pendant le geste, sans lancer computeNear (trop lourd → à-coups)
+    if (U.userMove && !U.camLock) {
+      const c = map.getCenter();
+      U.pinPend = { lat: +c.lat.toFixed(6), lon: +c.lng.toFixed(6) };
+    }
+  });
+  map.on('dragend', () => { dragging = false; canvas.style.cursor = 'grab'; });
+  map.on('moveend', () => {
+    map.getContainer().parentElement.classList.remove('moving');
+    U.camLock = false;
+    if (U.userMove) { U.userMove = false; schedulePin(true); }
+  });
 }
 let destMk = null, gpsMk = null, linesSig = '';
 function circleFC(lat, lon, r, n = 64) {
@@ -758,8 +797,9 @@ function schedulePin(final) {
   const map = U.map; if (!map) return;
   const c = map.getCenter(); U.pinPend = { lat: +c.lat.toFixed(6), lon: +c.lng.toFixed(6) };
   clearTimeout(pinT);
-  if (final) return applyPin(true);
-  if (performance.now() - pinLast > 700) applyPin(false); else pinT = setTimeout(() => applyPin(false), 300);
+  // après un pan : attendre la fin de l'inertie, puis un court debounce — jamais de recalcul pendant le drag
+  if (final) { pinT = setTimeout(() => applyPin(true), 140); return; }
+  pinT = setTimeout(() => applyPin(false), 450);
 }
 function applyPin(final) {
   const pend = U.pinPend; if (!pend || !U.dataReady) return;
@@ -851,7 +891,13 @@ function currentSheetH() { if (isDesk()) return 0; const el = $('#sheet'); retur
 function applyMapPad(h, animate) { if (!U.map) return; U.camLock = true; U.map.setPadding({ top: 0, right: 0, bottom: h || 0, left: 0 }, { duration: animate ? 280 : 0 }); clearTimeout(applyMapPad._t); applyMapPad._t = setTimeout(() => { U.camLock = false; }, animate ? 320 : 30); }
 function setSheet(snap, animate = true) {
   const sheet = $('#sheet'); if (!sheet) return;
-  if (isDesk()) { sheet.style.height = ''; sheet.dataset.snap = 'desk'; document.documentElement.style.setProperty('--sheet-h', '0px'); applyMapPad(0, animate); return; }
+  if (isDesk()) {
+    U.sheet = 'desk'; sheet.style.height = ''; sheet.dataset.snap = 'desk'; $('#app').dataset.sheet = 'desk';
+    document.documentElement.style.setProperty('--sheet-h', '0px');
+    applyMapPad(0, animate);
+    if (U.map) requestAnimationFrame(() => U.map && U.map.resize());
+    return;
+  }
   U.sheet = snap; const h = sheetHeights()[snap]; sheet.dataset.snap = snap; $('#app').dataset.sheet = snap;
   sheet.style.transition = animate ? 'height .38s cubic-bezier(.22,1,.36,1)' : 'none'; sheet.style.height = h + 'px';
   document.documentElement.style.setProperty('--sheet-h', h + 'px'); applyMapPad(h, animate);
@@ -870,7 +916,10 @@ function initSheet() {
   window.addEventListener('pointermove', onMove, { passive: false }); window.addEventListener('pointerup', onEnd); window.addEventListener('pointercancel', onEnd);
   $('#panel').addEventListener('scroll', () => { if (isDesk() || dragging) return; if (U.sheet === 'peek' && panel.scrollTop > 16) setSheet('half'); else if (U.sheet === 'half' && panel.scrollTop > 28) setSheet('full'); }, { passive: true });
   matchMedia('(min-width: 900px)').addEventListener('change', () => setSheet(isDesk() ? 'desk' : (U.sheet === 'desk' ? 'half' : U.sheet), false));
-  window.addEventListener('resize', () => { if (!isDesk()) setSheet(U.sheet || 'half', false); });
+  window.addEventListener('resize', () => {
+    if (U.map) U.map.resize();
+    setSheet(isDesk() ? 'desk' : (U.sheet === 'desk' ? 'half' : (U.sheet || 'half')), false);
+  });
   setSheet(isDesk() ? 'desk' : (U.sheet || 'half'), false);
 }
 
