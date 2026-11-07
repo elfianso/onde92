@@ -11,7 +11,7 @@ function load(nowMs) {
     document: { querySelector: () => null, querySelectorAll: () => [] }, window: { dispatchEvent() { } }, CustomEvent: class { },
     fetch: async u => { const f = path.join(PUB, u.split('?')[0]); return { ok: fs.existsSync(f), status: 200, json: async () => JSON.parse(fs.readFileSync(f, 'utf8')) }; } };
   vm.createContext(ctx);
-  vm.runInContext(fs.readFileSync(path.join(PUB, 'core.js'), 'utf8') + '\n;this.__x={S,getLine,departures,journeys,midnight,parisParts,fmtHM,isFin,verdict,addDays,rtJourneys,rtPredictions,tripRtJourneys,theoJourneys,isLive};', ctx);
+  vm.runInContext(fs.readFileSync(path.join(PUB, 'core.js'), 'utf8') + '\n;this.__x={S,getLine,departures,journeys,midnight,parisParts,fmtHM,isFin,verdict,addDays,rtJourneys,rtPredictions,tripRtJourneys,theoJourneys,isLive,relDayShort,followDayMark,failMemo};', ctx);
   return ctx.__x;
 }
 module.exports = { load };

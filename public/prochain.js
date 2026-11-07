@@ -37,6 +37,7 @@ const U = {
   map: null, styleReady: false, sat: localStorage.getItem('onde-sat') === '1', styles: {},
 };
 const N = { index: null, metas: {}, metaP: {}, tiles: new Map(), tileP: new Map(), legacy: {} };
+const tileFail = failMemo(), lineFail = failMemo();
 const HOME = { lat: 48.8585, lon: 2.3470, label: 'Paris — Châtelet', src: 'home' };
 const FRANCE = [[-5.8, 41.2], [10.2, 51.3]];
 const MAXL = 44; // lignes chargées au plus pour un point
@@ -56,15 +57,23 @@ function bigWhen(d, now, dim) {
   if (m < 1) return `<span class="${c}">${lv}<b>&lt;1</b><small>min</small></span>`;
   return m < 60 ? `<span class="${c}">${lv}<b>${m}</b><small>min</small></span>` : `<span class="${c} hm">${lv}${dayTag(d.t, now)}<b>${fmtHM(d.t)}</b></span>`;
 }
-// « demain » devant une heure qui tombe un autre jour (ex. 23:10 → premier départ à 05:32)
-const dayTag = (t, now) => t - now > 3 * 3600e3 && parisParts(t).ymd !== parisParts(now).ymd ? '<small class="dm">demain</small>' : '';
+// Jour devant une heure lointaine. « demain » seulement pour le lendemain ; au-delà, le jour réel (« lun. 9 »).
+const dayTag = (t, now) => {
+  if (!(t - now > 3 * 3600e3)) return '';
+  const lab = relDayShort(t, now);
+  return lab ? `<small class="dm">${esc(lab)}</small>` : '';
+};
 const smallWhen = (d, now) => d.t - now < 60e3 ? '&lt;1' : minsOf(d.t, now) < 60 ? String(minsOf(d.t, now)) : fmtHM(d.t);
 const relWhen = (d, now) => d.t - now < 45e3 ? 'maintenant' : minsOf(d.t, now) < 60 ? 'dans ' + Math.max(1, minsOf(d.t, now)) + ' min' : 'dans ' + Math.floor(minsOf(d.t, now) / 60) + ' h ' + String(minsOf(d.t, now) % 60).padStart(2, '0');
-// Les suivants, en petit : « puis 12 · 19 min »
-function nextRow(ds, now) {
+// Les suivants, en petit : « puis 12 · 19 min », ou « puis demain 11:07 » si l'horloge change de jour.
+function nextRow(ds, now, anchor) {
   if (!ds.length) return '';
   const allMin = ds.every(d => minsOf(d.t, now) < 60);
-  return `<span class="nx"><span class="nx-p">puis</span>${ds.map(d => `<span class="nx-t${d.rt ? ' rt' : ''}"><span>${smallWhen(d, now)}${!allMin && minsOf(d.t, now) < 60 ? '<small> min</small>' : ''}</span>${fin(d)}</span>`).join('<i class="nx-s">·</i>')}${allMin ? '<span class="nx-u">min</span>' : ''}</span>`;
+  return `<span class="nx"><span class="nx-p">puis</span>${ds.map(d => {
+    const lab = followDayMark(d.t, anchor, now);
+    const dm = lab ? `<small class="dm">${esc(lab)}</small>` : '';
+    return `<span class="nx-t${d.rt ? ' rt' : ''}">${dm}<span>${smallWhen(d, now)}${!allMin && minsOf(d.t, now) < 60 ? '<small> min</small>' : ''}</span>${fin(d)}</span>`;
+  }).join('<i class="nx-s">·</i>')}${allMin ? '<span class="nx-u">min</span>' : ''}</span>`;
 }
 const shortWhen = (d, now) => d.t - now < 60e3 ? '&lt;1 min' : minsOf(d.t, now) < 60 ? minsOf(d.t, now) + ' min' : fmtHM(d.t);
 const vPill = v => `<span class="v ${v.k}">${v.short}</span>`;
@@ -91,11 +100,12 @@ async function loadIndex() {
 function netsAt(lat, lon, m = 0.05) { return (N.index?.networks || []).filter(n => lat >= n.bbox[0] - m && lat <= n.bbox[2] + m && lon >= n.bbox[1] - m && lon <= n.bbox[3] + m); }
 function netMeta(id) {
   if (N.metas[id]) return Promise.resolve(N.metas[id]);
-  return N.metaP[id] ||= fetch(`/data/n/${id}/lines.json`).then(r => r.json()).then(m => {
+  if (tileFail.cooling('meta:' + id, Date.now())) return Promise.resolve(null);
+  return N.metaP[id] ||= fetch(`/data/n/${id}/lines.json`).then(r => { if (!r.ok) throw new Error('catalogue ' + r.status); return r.json(); }).then(m => {
     m.tileSet = new Set(m.tiles);
     for (const c of m.lines) S.meta[c.k] = { short: c.k, id: c.id, label: c.label, color: c.color, textColor: c.text, mode: c.mode, termini: c.termini, long: c.long, net: id, rid: c.rid, agency: c.agency };
     return (N.metas[id] = m);
-  });
+  }).catch(e => { delete N.metaP[id]; tileFail.block('meta:' + id, Date.now()); throw e; });
 }
 function tileKeys(m, lat, lon, R) {
   const TL = m.tile.lat, TO = m.tile.lon, dLat = R / 111320, dLon = R / (111320 * Math.cos(lat * Math.PI / 180));
@@ -105,30 +115,34 @@ function tileKeys(m, lat, lon, R) {
 }
 function loadTile(net, tk) {
   const id = net + '|' + tk; if (N.tiles.has(id)) return Promise.resolve(N.tiles.get(id));
+  if (tileFail.cooling(id, Date.now())) return Promise.resolve(null);
   if (N.tileP.has(id)) return N.tileP.get(id);
-  const p = fetch(`/data/n/${net}/t/${tk}.json`).then(r => r.json()).then(j => {
+  const p = fetch(`/data/n/${net}/t/${tk}.json`).then(r => { if (!r.ok) throw new Error('tuile ' + r.status); return r.json(); }).then(j => {
     const m = N.metas[net]; const qs = j.q.map(([sid, name, lat, lon, area, li]) => ({ net, sid, name, lat, lon, area, lines: li.map(i => m.lines[i].k) }));
     N.tiles.set(id, qs); N.tileP.delete(id); return qs;
-  }).catch(e => { N.tileP.delete(id); throw e; });
+  }).catch(e => { N.tileP.delete(id); tileFail.block(id, Date.now()); throw e; });
   N.tileP.set(id, p); return p;
 }
 const netR = (id, R) => id === 'sncf' ? Math.max(R, 6000) : R;
 // Quais connus (tuiles déjà chargées) autour d'un point ; `pending` = il manque des tuiles ou des catalogues.
 function areaState(o, R = 2600) {
-  const out = []; let pending = false;
+  const out = []; let pending = false, gaps = 0; const now = Date.now();
   for (const n of netsAt(o.lat, o.lon)) {
-    const m = N.metas[n.id]; if (!m) { pending = true; continue; }
+    const m = N.metas[n.id]; if (!m) { if (tileFail.cooling('meta:' + n.id, now)) gaps++; else pending = true; continue; }
     for (const tk of tileKeys(m, o.lat, o.lon, netR(n.id, R))) {
-      const qs = N.tiles.get(n.id + '|' + tk); if (!qs) { pending = true; continue; }
+      const id = n.id + '|' + tk;
+      if (tileFail.cooling(id, now)) { gaps++; continue; }
+      const qs = N.tiles.get(id); if (!qs) { pending = true; continue; }
       for (const q of qs) { if (Math.abs(q.lat - o.lat) > 0.06 || Math.abs(q.lon - o.lon) > 0.09) continue; out.push({ ...q, d: haversine([o.lat, o.lon], [q.lat, q.lon]) }); }
     }
   }
-  return { quays: out, pending };
+  return { quays: out, pending, gaps };
 }
 async function ensureArea(o, R = 2600) {
   const nets = netsAt(o.lat, o.lon);
   await Promise.all(nets.map(n => netMeta(n.id).catch(() => null)));
-  await Promise.all(nets.filter(n => N.metas[n.id]).flatMap(n => tileKeys(N.metas[n.id], o.lat, o.lon, netR(n.id, R)).map(tk => loadTile(n.id, tk).catch(() => null))));
+  const now = Date.now();
+  await Promise.all(nets.filter(n => N.metas[n.id]).flatMap(n => tileKeys(N.metas[n.id], o.lat, o.lon, netR(n.id, R)).filter(tk => !tileFail.cooling(n.id + '|' + tk, now)).map(tk => loadTile(n.id, tk).catch(() => null))));
 }
 function refreshLines() { S.lines = Object.keys(S.data).filter(k => k.includes(':') && S.meta[k]).map(k => S.meta[k]); }
 const MODE_RANK = k => (MODES[modeOf(k)] || MODES.bus).o;
@@ -201,10 +215,13 @@ function computeNear(quick) {
   within.sort((a, b) => a.d - b.d);
   const want = new Map(), wantRail = new Map();
   for (const q of within) for (const k of q.lines) { const m = q.net === 'sncf' && q.d > R ? wantRail : want; if (!want.has(k) && !m.has(k)) m.set(k, q.d); }
-  const keys = [...[...want.keys()].slice(0, MAXL), ...[...wantRail.keys()].slice(0, 14)], missing = keys.filter(k => !S.data[k]);
+  const keys = [...[...want.keys()].slice(0, MAXL), ...[...wantRail.keys()].slice(0, 14)];
+  const nowFail = Date.now();
+  const missing = keys.filter(k => !S.data[k] && !lineFail.cooling(k, nowFail));
+  U.loadGap = st.gaps > 0 || keys.some(k => !S.data[k] && lineFail.cooling(k, nowFail));
   if (missing.length) {
     U.loading = true;
-    Promise.all(missing.map(k => getLine(k).catch(() => null))).then(() => { refreshLines(); if (gen === U.nearGen) { computeNear(quick); render(); syncMap(); if (!quick) schedulePoll(); } });
+    Promise.all(missing.map(k => getLine(k).catch(() => { lineFail.block(k, Date.now()); return null; }))).then(() => { refreshLines(); if (gen === U.nearGen) { computeNear(quick); render(); syncMap(); if (!quick) schedulePoll(); } });
   } else if (!st.pending) U.loading = false;
   const keySet = new Set(keys), best = new Map();
   for (const q of within) for (const k of q.lines) {
@@ -255,22 +272,28 @@ function verdictLine(ds, bi, W, now) {
   if (v.k === 'ok') return { html: `<span class="v ok">Tu l'as</span><span>${v.left < 90e3 ? 'pars maintenant' : 'pars à ' + fmtHM(v.leaveBy)}</span>${skipped}`, miss: false };
   if (v.k === 'tight') return { html: `<span class="v tight">Juste</span><span>presse le pas</span>${skipped}`, miss: false };
   const nx = ds.find(d => nbVerdict(d, W, now).k !== 'miss');
-  return { html: `<span class="v miss">Trop tard</span>${nx ? `<span>suivant ${minsOf(nx.t, now) < 60 ? relWhen(nx, now) : (dayTag(nx.t, now) ? 'demain ' : '') + 'à ' + fmtHM(nx.t)}</span>` : ''}`, miss: true };
+  let nxTxt = '';
+  if (nx) {
+    if (minsOf(nx.t, now) < 60) nxTxt = relWhen(nx, now);
+    else { const lab = nx.t - now > 3 * 3600e3 ? relDayShort(nx.t, now) : ''; nxTxt = (lab ? lab + ' ' : '') + 'à ' + fmtHM(nx.t); }
+  }
+  return { html: `<span class="v miss">Trop tard</span>${nxTxt ? `<span>suivant ${nxTxt}</span>` : ''}`, miss: true };
 }
 // Un sens d'une ligne : « vers Terminus » à gauche, gros compte à rebours à droite, les suivants dessous.
 function dirRowHTML(g, ds, W, now, o = {}) {
   const bi = bigIndex(ds, W, now), a = ds[bi], vl = verdictLine(ds, bi, W, now);
   const sub = vl.html || (a ? '' : `<span>Plus de ${vehicleWord(g.short)} aujourd'hui</span>`);
   const inner = `<span class="dir-l"><span class="dir-to"><small>vers</small><b>${esc(dirName(g.short, g.dir, a && a.headsign))}</b></span>${sub ? `<span class="dir-sub">${sub}</span>` : ''}${bi > 0 && vl.html ? `<span class="was">Le ${vehicleWord(g.short)} de <s>${fmtHM(ds[0].t)}</s> : trop juste</span>` : ''}${o.stop ? `<span class="dir-at">${I.pin}${esc(o.stop)}</span>` : ''}</span>
-      <span class="dir-r">${bigWhen(a, now, vl.miss)}${fin(a)}${nextRow(ds.slice(bi + 1, bi + 3), now)}</span>`;
+      <span class="dir-r">${bigWhen(a, now, vl.miss)}${fin(a)}${nextRow(ds.slice(bi + 1, bi + 3), now, a ? a.t : null)}</span>`;
   if (o.static) return `<div class="dir"><div class="dir-h">${inner}</div></div>`;
   const on = U.sel === g.key;
-  return `<div class="dir ${on ? 'on' : ''}" data-key="${esc(g.key)}"><button class="dir-h" type="button" aria-expanded="${on}">${inner}</button>${on ? moreHTML(g, ds, W, now) : ''}</div>`;
+  return `<div class="dir ${on ? 'on' : ''}" data-key="${esc(g.key)}"><button class="dir-h" type="button" aria-expanded="${on}">${inner}<i class="chev" aria-hidden="true"></i></button>${on ? moreHTML(g, ds, W, now) : ''}</div>`;
 }
 function moreHTML(g, ds, W, now) {
   const tl = ds.map(d => { const v = nbVerdict(d, W, now), late = d.rt && d.delay > 90e3 ? `<small class="late">+${Math.round(d.delay / 60000)} min</small>` : '';
     const hs = d.headsign && !isCode(d.headsign) && d.headsign !== dirName(g.short, g.dir) ? `<small class="hs">→ ${esc(d.headsign)}</small>` : '';
-    return `<li class="${v.k === 'miss' ? 'miss' : ''}"><b>${d.rt ? I.live : ''}${fmtHM(d.t)}</b><small>${v.k === 'miss' && W != null && W <= 15 * 60 ? 'trop juste' : relWhen(d, now)}</small>${late}${hs}${fin(d)}</li>`; }).join('');
+    const lab = relDayShort(d.t, now), dm = lab ? `<small class="dm">${esc(lab)}</small>` : '';
+    return `<li class="${v.k === 'miss' ? 'miss' : ''}"><b>${d.rt ? I.live : ''}${dm}${fmtHM(d.t)}</b><small>${v.k === 'miss' && W != null && W <= 15 * 60 ? 'trop juste' : relWhen(d, now)}</small>${late}${hs}${fin(d)}</li>`; }).join('');
   return `<div class="more${U.opened === g.key ? ' opening' : ''}">
       ${tl ? `<ol class="tl">${tl}</ol>` : `<p class="none">Plus aucun ${vehicleWord(g.short)} prévu dans ce sens aujourd'hui.</p>`}
       <div class="more-a"><button type="button" class="link" data-stopsid="${esc(g.short + '|' + g.sid)}">${I.pin}Tous les départs à ${esc(g.s.name)}</button>${N.legacy[g.short] ? `<a class="link faint" href="/lignes.html#/ligne/${N.legacy[g.short]}?${g.dir ? 'd=1&' : ''}s=${encodeURIComponent(g.sid)}">Fiche de la ligne</a>` : ''}</div>
@@ -292,35 +315,43 @@ function nearItems(now) {
   const groups = visibleGroups();
   if (!U.near.length) {
     if (U.loading) return null;
-    return `<div class="empty"><b>Pas de départ tout près</b><p>Fais glisser la carte vers une rue, une gare ou une station : les départs autour du rond s'affichent tout seuls.</p><p class="cov-s">Réseaux couverts : ${(N.index?.networks || []).map(n => esc(n.region)).join(' · ')}</p></div>`;
+    if (U.loadGap) return gapHTML();
+    return `<div class="empty" role="status"><b>Pas de départ tout près</b><p>Fais glisser la carte vers une rue, une gare ou une station : les départs autour du rond s'affichent tout seuls.</p><p class="cov-s">Réseaux couverts : ${(N.index?.networks || []).map(n => esc(n.region)).join(' · ')}</p></div>`;
   }
-  if (!groups.length) return `<div class="empty"><b>Pas de ${esc((MODES[U.mfilter]?.n || 'ligne').toLowerCase())} tout près</b><p>Aucune ligne de ce type ne passe autour du rond.</p><button type="button" class="btn ghost" data-act="nofilter">Voir tous les départs</button></div>`;
+  if (!groups.length) return `<div class="empty" role="status"><b>Pas de ${esc((MODES[U.mfilter]?.n || 'ligne').toLowerCase())} tout près</b><p>Aucune ligne de ce type ne passe autour du rond.</p><button type="button" class="btn ghost" data-act="nofilter">Voir tous les départs</button></div>`;
   return groups.map(gr => ({ k: gr.short, h: lineCardHTML(gr, now) }));
 }
 // Données horaires périmées (fenêtre GTFS dépassée) : on le dit plutôt que d'afficher « plus de bus ».
 function staleNets() { const t = todayYmd(); return (N.index?.networks || []).filter(n => n.window && n.window[1] && t > n.window[1]).map(n => n.name); }
-function footHTML() { const st = staleNets(); return `<p class="foot"><span class="lg">${I.live}en vert : temps réel</span><span>· le reste : horaire prévu</span>${st.length ? `<span class="warn">Horaires prévus à mettre à jour : ${esc(st.join(', '))}</span>` : ''}</p>`; }
-function skeletonHTML(msg = 'On cherche les départs autour de toi…') { return `<p class="sk-msg">${msg}</p><div class="list sk-l">${[0, 1, 2].map(() => '<div class="lc sk"><div class="sk-h"><i></i><span></span></div><div class="sk-r"><span></span><b></b></div></div>').join('')}</div>`; }
+function gapHTML() { return `<div class="empty" role="status"><b>Les horaires n'ont pas pu se charger</b><p>La connexion a coupé le chargement. Réessaie dans un instant.</p><button type="button" class="btn" data-act="retry">Réessayer</button></div>`; }
+function footHTML() {
+  const st = staleNets();
+  const gap = U.loadGap && U.near.length ? `<span class="warn">Certains arrêts proches n'ont pas pu être chargés.</span>` : '';
+  return `<p class="foot"><span class="lg">${I.live}en vert : temps réel</span><span>· le reste : horaire prévu</span>${gap}${st.length ? `<span class="warn">Horaires prévus à mettre à jour : ${esc(st.join(', '))}</span>` : ''}</p>`;
+}
+function skeletonHTML(msg = 'On cherche les départs autour de toi…') { return `<p class="sk-msg" role="status">${msg}</p><div class="list sk-l">${[0, 1, 2].map(() => '<div class="lc sk"><div class="sk-h"><i></i><span></span></div><div class="sk-r"><span></span><b></b></div></div>').join('')}</div>`; }
 
 /* ================= arrêt touché sur la carte ================= */
 function stopHTML(now) {
-  const p = U.stop, groups = new Map(); let missing = 0;
-  for (const q of p.quays) { if (!S.data[q.short]) { missing++; continue; } for (const d of departures(q.short, q.sid, now, 10)) {
+  const p = U.stop, groups = new Map();
+  const waiting = p.quays.some(q => !S.data[q.short] && !lineFail.cooling(q.short, now));
+  const blocked = p.quays.some(q => !S.data[q.short] && lineFail.cooling(q.short, now));
+  for (const q of p.quays) { if (!S.data[q.short]) continue; for (const d of departures(q.short, q.sid, now, 10)) {
     if (d.t < now - 20e3) continue; const k = q.short + '|' + d.dir;
     if (!groups.has(k)) groups.set(k, { short: q.short, dir: d.dir, sid: q.sid, s: q.s, deps: [] });
     const g = groups.get(k); if (!g.deps.some(x => Math.abs(x.t - d.t) < 30e3)) g.deps.push(d);
   } }
   const W = U.stop.walk?.duration ?? (U.origin ? haversine([U.origin.lat, U.origin.lon], [p.lat, p.lon]) * 1.3 / MB.SPEED : null);
   const gs = [...groups.values()].map(g => ({ ...g, deps: g.deps.sort((a, b) => a.t - b.t).slice(0, 3) })).sort((a, b) => byMode(a.short, b.short) || a.dir - b.dir);
-  if (!gs.length) return missing ? skeletonHTML() : `<div class="empty"><b>Aucun départ annoncé ici</b><p>Le service est peut-être terminé pour aujourd'hui à cet arrêt.</p><button type="button" class="btn ghost" data-act="close">Retour</button></div>`;
+  if (!gs.length) return waiting ? skeletonHTML() : blocked ? gapHTML() : `<div class="empty" role="status"><b>Aucun départ annoncé ici</b><p>Le service est peut-être terminé pour aujourd'hui à cet arrêt.</p><button type="button" class="btn ghost" data-act="close">Retour</button></div>`;
   const byLine = new Map(); for (const g of gs) { if (!byLine.has(g.short)) byLine.set(g.short, []); byLine.get(g.short).push(g); }
   return `<div class="list">${[...byLine.entries()].map(([k, rows]) => `<section class="lc" style="--c:${(S.meta[k] || {}).color}"><header class="lc-h">${lb(k)}<span class="lc-n">${esc(modeName(k))}</span></header>
       ${rows.map(g => dirRowHTML(g, g.deps, W, now, { static: true })).join('')}</section>`).join('')}</div>${footHTML()}`;
 }
 function openStop(p) {
   U.stop = { ...p, walk: null }; U.sel = null; render(); syncMap();
-  const miss = [...new Set(p.quays.map(q => q.short))].filter(k => !S.data[k]);
-  if (miss.length) Promise.all(miss.map(k => getLine(k).catch(() => null))).then(() => { refreshLines(); render(); schedulePoll(); });
+  const miss = [...new Set(p.quays.map(q => q.short))].filter(k => !S.data[k] && !lineFail.cooling(k, Date.now()));
+  if (miss.length) Promise.all(miss.map(k => getLine(k).catch(() => { lineFail.block(k, Date.now()); return null; }))).then(() => { refreshLines(); render(); schedulePoll(); });
   if (U.origin) walkRoute(U.origin, { lat: p.lat, lon: p.lon }).then(w => { if (U.stop && U.stop.k2 === p.k2) { U.stop.walk = w; render(); syncMap(); } });
   schedulePoll(); scrollPanelTop();
 }
@@ -360,7 +391,7 @@ function destHTML(now) {
   const wd = P.walkDirect;
   const walkOnly = wd ? `<div class="walkonly">${I.walk}<span><b>${fmtDur(wd.duration)} à pied</b> si tu marches directement · ${fmtDist(wd.distance)}</span></div>` : '';
   const ext = `<a class="link ext" href="${gmapsLink()}" target="_blank" rel="noopener">${I.ext}Trajets avec correspondance</a>`;
-  if (!P.opts.length) return `<div class="empty"><b>Pas de trajet direct</b><p>Aucune ligne proche ne t'y emmène sans changement. Pour un trajet avec correspondance, ouvre-le dans Google Maps.</p><p>${ext}</p><button type="button" class="btn ghost" data-act="cleardest">Autre destination</button></div>${walkOnly}`;
+  if (!P.opts.length) return `<div class="empty" role="status"><b>Pas de trajet direct</b><p>Aucune ligne proche ne t'y emmène sans changement. Pour un trajet avec correspondance, ouvre-le dans Google Maps.</p><p>${ext}</p><button type="button" class="btn ghost" data-act="cleardest">Autre destination</button></div>${walkOnly}`;
   return `<div class="opts">${P.opts.slice(0, 3).map((op, i) => optHTML(op, i, now)).join('')}</div>${walkOnly}
     ${P.loading ? '<p class="foot"><span>Calcul des trajets à pied…</span></p>' : `<p class="foot">${ext}</p>`}`;
 }
@@ -395,12 +426,12 @@ function askHTML() {
   return `<div class="ask">
     ${U.origin ? `<button class="back" type="button" data-act="unask" aria-label="Retour">${I.x}</button>` : ''}
     <h1>Tu pars d'où&nbsp;?</h1><p>${why}Une adresse, une gare, un arrêt ou un lieu.</p>
-    <div class="field"><label class="search-in">${I.pin}<input id="addr" type="search" inputmode="search" enterkeyhint="search" autocomplete="street-address" placeholder="Adresse, gare, arrêt, lieu…" aria-label="Ton adresse ou un lieu"></label><div class="results" id="addrRes" role="listbox"></div></div>
+    <div class="field"><label class="search-in">${I.pin}<input id="addr" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="addrRes" inputmode="search" enterkeyhint="search" autocomplete="street-address" placeholder="Adresse, gare, arrêt, lieu…" aria-label="Ton adresse ou un lieu"></label><div class="results" id="addrRes" role="listbox" aria-label="Suggestions"></div></div>
     ${last && (!U.origin || U.origin.label !== last.label) ? `<button type="button" class="link" data-act="last">${I.pin}${esc(last.label)}</button>` : ''}
     ${U.geo !== 'denied' && U.origin?.src !== 'gps' && 'geolocation' in navigator && U.origin ? `<button type="button" class="link" data-act="geo">${I.gps}Utiliser ma position</button>` : ''}
   </div>`;
 }
-function pendingHTML() { return `<div class="empty state"><div class="pulse"><i></i><i></i>${I.gps}</div><b>On cherche ta position…</b><p>Autorise la localisation pour voir les départs autour de toi.</p><button type="button" class="btn ghost" data-act="ask">Choisir un point de départ</button></div>`; }
+function pendingHTML() { return `<div class="empty state" role="status"><div class="pulse"><i></i><i></i>${I.gps}</div><b>On cherche ta position…</b><p>Autorise la localisation pour voir les départs autour de toi.</p><button type="button" class="btn ghost" data-act="ask">Choisir un point de départ</button></div>`; }
 
 /* ================= statut, filtres, rendu ================= */
 let lastSig = '', lastHTML = '';
@@ -455,6 +486,7 @@ function render() {
   const m = mode(), now = Date.now();
   $('#searchBox').hidden = !(m === 'near' || m === 'dest' || m === 'stop');
   $('#app').dataset.mode = m;
+  $('#sheet').setAttribute('aria-busy', U.dataReady && U.loading ? 'true' : 'false');
   $('#busy').classList.toggle('on', !!(U.dataReady && U.loading && (m === 'near' || m === 'stop')));
   renderStatus(m); renderFilters(m);
   if (m === 'ask') {
@@ -487,6 +519,7 @@ $('#sheet').addEventListener('click', e => {
   if (act === 'cleardest') return clearDest();
   if (act === 'nofilter') { U.filter.clear(); U.mfilter = null; render(); syncMap(); return; }
   if (act === 'reload') { location.reload(); return; }
+  if (act === 'retry') { tileFail.clear(); lineFail.clear(); U.loading = true; render(); if (U.origin) { computeNear(false); if (U.dest) computePlan(false); schedulePoll(); } if (U.stop) openStop(U.stop); return; }
   const mc = t.closest('.fchip[data-mode]'); if (mc) { const md = mc.dataset.mode; U.mfilter = !md || U.mfilter === md ? null : md; U.filter.clear(); render(); syncMap(); scrollPanelTop(); return; }
   const chip = t.closest('.fchip[data-line]');
   if (chip) { const s = chip.dataset.line; if (U.filter.has(s)) U.filter.delete(s); else U.filter.add(s); render(); syncMap(); return; }
@@ -896,27 +929,50 @@ $('#btnTheme').onclick = () => {
 };
 const btnMore = $('#btnMore'), moreMenu = $('#moreMenu');
 function closeMenu() { if (!moreMenu.hidden) { moreMenu.hidden = true; btnMore.setAttribute('aria-expanded', 'false'); } }
-btnMore.onclick = e => { e.stopPropagation(); const open = moreMenu.hidden; moreMenu.hidden = !open; btnMore.setAttribute('aria-expanded', open ? 'true' : 'false'); if (open) syncMenuLabels(); };
+function menuItems() { return [...moreMenu.querySelectorAll('[role=menuitem]')]; }
+btnMore.onclick = e => {
+  e.stopPropagation(); const open = moreMenu.hidden; moreMenu.hidden = !open; btnMore.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) { syncMenuLabels(); menuItems()[0]?.focus(); }
+};
+moreMenu.addEventListener('keydown', e => {
+  const items = menuItems(); if (!items.length) return;
+  const i = items.indexOf(document.activeElement);
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus(); }
+  else if (e.key === 'Home') { e.preventDefault(); items[0].focus(); }
+  else if (e.key === 'End') { e.preventDefault(); items[items.length - 1].focus(); }
+});
 document.addEventListener('click', e => { if (!e.target.closest('.map-menu')) closeMenu(); });
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenu(); });
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (!moreMenu.hidden) { closeMenu(); btnMore.focus(); return; }
+  if (U.sel) { U.sel = null; render(); syncMap(); }
+});
 
 /* ================= feuille mobile (peek / half / full) ================= */
 function isDesk() { return matchMedia('(min-width: 900px)').matches; }
 function sheetHeights() { const H = innerHeight, chrome = $('#chrome'), grip = $('#sheetGrip'); const ch = (chrome?.offsetHeight || 150) + (grip?.offsetHeight || 22); return { peek: Math.min(Math.max(ch + 52, 168), Math.round(H * 0.36)), half: Math.round(H * 0.52), full: Math.round(H * 0.9) }; }
 function currentSheetH() { if (isDesk()) return 0; const el = $('#sheet'); return el ? el.getBoundingClientRect().height : sheetHeights()[U.sheet || 'half']; }
 function applyMapPad(h, animate) { if (!U.map) return; U.camLock = true; U.map.setPadding({ top: 0, right: 0, bottom: h || 0, left: 0 }, { duration: animate ? 280 : 0 }); clearTimeout(applyMapPad._t); applyMapPad._t = setTimeout(() => { U.camLock = false; }, animate ? 320 : 30); }
+function syncGrip() {
+  const handle = $('#sheetGrip'); if (!handle) return;
+  const order = ['peek', 'half', 'full'], names = { peek: 'aperçu', half: 'mi-hauteur', full: 'presque plein écran', desk: 'panneau' };
+  const snap = isDesk() ? 'desk' : (U.sheet || 'half'), i = Math.max(0, order.indexOf(snap));
+  handle.setAttribute('aria-valuenow', String(isDesk() ? 1 : i));
+  handle.setAttribute('aria-valuetext', names[snap] || names.half);
+  handle.tabIndex = isDesk() ? -1 : 0;
+}
 function setSheet(snap, animate = true) {
   const sheet = $('#sheet'); if (!sheet) return;
   if (isDesk()) {
     U.sheet = 'desk'; sheet.style.height = ''; sheet.dataset.snap = 'desk'; $('#app').dataset.sheet = 'desk';
     document.documentElement.style.setProperty('--sheet-h', '0px');
-    applyMapPad(0, animate);
+    applyMapPad(0, animate); syncGrip();
     if (U.map) requestAnimationFrame(() => U.map && U.map.resize());
     return;
   }
   U.sheet = snap; const h = sheetHeights()[snap]; sheet.dataset.snap = snap; $('#app').dataset.sheet = snap;
   sheet.style.transition = animate ? 'height .38s cubic-bezier(.22,1,.36,1)' : 'none'; sheet.style.height = h + 'px';
-  document.documentElement.style.setProperty('--sheet-h', h + 'px'); applyMapPad(h, animate);
+  document.documentElement.style.setProperty('--sheet-h', h + 'px'); applyMapPad(h, animate); syncGrip();
 }
 function initSheet() {
   const sheet = $('#sheet'), handle = $('#sheetGrip'), chrome = $('#chrome');
@@ -929,6 +985,17 @@ function initSheet() {
     if (Math.abs(vY) > .45 && performance.now() - lastT < 120) nearest = vY < 0 ? (order.find(k => s[k] > h + 8) || 'full') : ([...order].reverse().find(k => s[k] < h - 8) || 'peek'); // geste rapide : cran suivant
     setSheet(nearest, true); };
   handle.addEventListener('pointerdown', onStart); chrome.addEventListener('pointerdown', onStart);
+  handle.addEventListener('keydown', e => {
+    if (isDesk()) return;
+    const order = ['peek', 'half', 'full']; let i = Math.max(0, order.indexOf(U.sheet));
+    if (e.key === 'ArrowUp' || e.key === 'ArrowRight' || e.key === 'PageUp') i = Math.min(2, i + 1);
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'PageDown') i = Math.max(0, i - 1);
+    else if (e.key === 'Home') i = 0;
+    else if (e.key === 'End') i = 2;
+    else if (e.key === 'Enter' || e.key === ' ') i = (i + 1) % 3;
+    else return;
+    e.preventDefault(); setSheet(order[i]);
+  });
   window.addEventListener('pointermove', onMove, { passive: false }); window.addEventListener('pointerup', onEnd); window.addEventListener('pointercancel', onEnd);
   $('#panel').addEventListener('scroll', () => { if (isDesk() || dragging) return; if (U.sheet === 'peek' && panel.scrollTop > 16) setSheet('half'); else if (U.sheet === 'half' && panel.scrollTop > 28) setSheet('full'); }, { passive: true });
   matchMedia('(min-width: 900px)').addEventListener('change', () => setSheet(isDesk() ? 'desk' : (U.sheet === 'desk' ? 'half' : U.sheet), false));
@@ -951,7 +1018,7 @@ async function boot() {
   if (!at) locate();
   if (window.maplibregl) initMap();
   try { await loadIndex(); await ensureArea(U.origin); }
-  catch (e) { panel.innerHTML = '<div class="empty"><b>Les horaires n\'ont pas pu se charger</b><p>Ta connexion semble coupée. Réessaie dans un instant.</p><button type="button" class="btn" data-act="reload">Réessayer</button></div>'; return; }
+  catch (e) { panel.innerHTML = '<div class="empty" role="status"><b>Les horaires n\'ont pas pu se charger</b><p>Ta connexion semble coupée. Réessaie dans un instant.</p><button type="button" class="btn" data-act="reload">Réessayer</button></div>'; return; }
   const g = N.index.networks.map(n => n.generated).sort()[0] || '';
   $('#footData').textContent = N.index.networks.map(n => n.name).join(' · ') + (g ? ' — horaires du ' + g.slice(0, 10).split('-').reverse().join('/') : '');
   U.dataReady = true;
