@@ -29,7 +29,7 @@
         <span class="brand-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path class="p1" d="M6 6l6 6-6 6"/><path class="p2" d="M12.5 6l6 6-6 6" opacity=".7"/></svg></span><b>Prochain</b>
       </a>
       <div class="map-menu">
-        <button class="fab" id="btnMore" type="button" aria-label="Menu" aria-haspopup="true" aria-expanded="false" title="Menu">
+        <button class="fab" id="btnMore" type="button" aria-label="Menu" aria-haspopup="true" aria-expanded="false" aria-controls="moreMenu" title="Menu">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h.01M12 12h.01M18 12h.01"/></svg>
         </button>
         <div class="menu" id="moreMenu" hidden role="menu">
@@ -57,20 +57,20 @@
   </div>
   <section class="sheet" id="sheet" aria-label="Départs" data-snap="half">
     <div class="busy" id="busy" aria-hidden="true"></div>
-    <div class="grip-wrap" id="sheetGrip"><span class="grip" aria-hidden="true"></span></div>
+    <button class="grip-wrap" id="sheetGrip" type="button" role="slider" aria-label="Hauteur de la liste des départs" aria-valuemin="0" aria-valuemax="2" aria-valuenow="1" aria-valuetext="mi-hauteur"><span class="grip" aria-hidden="true"></span></button>
     <div class="sheet-chrome" id="chrome">
       <div class="search" id="searchBox" hidden>
         <label class="search-in">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
-          <input id="q" type="search" inputmode="search" enterkeyhint="search" autocomplete="off" placeholder="Où vas-tu ?" aria-label="Où vas-tu ?">
+          <input id="q" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="qRes" inputmode="search" enterkeyhint="search" autocomplete="off" placeholder="Où vas-tu ?" aria-label="Où vas-tu ?">
           <button class="search-x" id="qClear" type="button" aria-label="Effacer" hidden><svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg></button>
         </label>
-        <div class="results" id="qRes" role="listbox"></div>
+        <div class="results" id="qRes" role="listbox" aria-label="Suggestions"></div>
       </div>
       <div class="status" id="status" hidden></div>
-      <div class="filters" id="filters" hidden role="toolbar" aria-label="Filtrer par mode ou par ligne"></div>
+      <div class="filters" id="filters" hidden role="group" aria-label="Filtrer par mode ou par ligne"></div>
     </div>
-    <div id="panel" class="panel" aria-live="polite"></div>
+    <div id="panel" class="panel"></div>
   </section>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>

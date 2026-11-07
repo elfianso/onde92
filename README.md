@@ -1,7 +1,7 @@
 # Prochain — le prochain départ, partout
 
 **Prochain** (ex-« Onde 92 ») affiche autour de toi les prochains bus, trams, métros, RER et trains, en temps réel quand la source le permet, avec le verdict « Tu l'as / Juste / Raté » selon ta marche.
-Site : <https://onde92.vercel.app> (l'URL historique est conservée ; dépôt GitHub `onde92`).
+Site : <https://prochain-app.vercel.app> (seule adresse publique ; dépôt GitHub et projet Vercel : `onde92`).
 
 ## Couverture (données ouvertes)
 | Réseau | Modes | Horaires | Temps réel |
@@ -52,7 +52,7 @@ Aucune dépendance npm.
 ## Déploiement Vercel (Hobby)
 - `public/` servi tel quel (pas de build) ; fonctions `api/` (Node 22, région `cdg1`) qui n'embarquent que `public/data/*.json` + `n/networks.json` (pas les 6 800 fichiers de lignes).
 - Variable : `PRIM_API_KEY` (Production + Preview).
-- Nom : l'appli s'appelle « Prochain » dans l'interface ; le projet Vercel reste `onde92`. **Renommer le projet Vercel changerait le domaine par défaut** (`<nouveau-nom>.vercel.app`) et casserait les liens existants : pour un nouveau domaine, ajouter plutôt un domaine/alias dans Vercel en gardant `onde92.vercel.app`.
+- Nom : l'appli s'appelle « Prochain » dans l'interface ; le projet Vercel et le dépôt restent `onde92`. La seule adresse publique est `prochain-app.vercel.app`. Le pare-feu refuse les autres noms d'hôte, dont `onde92.vercel.app` : ne pas ajouter d'alias public ni assouplir cette règle.
 
 ## Fiches des 4 lignes historiques (`/lignes.html`)
 Fiches détaillées des lignes 144 · 160 · 244 · 360 (horaires, plan, « Est-ce que j'ai mon bus ? »).
