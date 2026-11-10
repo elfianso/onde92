@@ -208,6 +208,7 @@ button.dir-h:active{background:var(--hover)}
 .dir-sub>span{overflow:hidden;text-overflow:ellipsis}
 .dir-sub .at::before{content:"· ";color:var(--faint)}
 .dir-sub .at:first-child::before{content:""}
+.dir-sub .v+span::before{content:"· ";color:var(--faint)}
 .dir-r{display:flex;flex-direction:column;align-items:flex-end;gap:3px;min-width:56px}
 /* le compte à rebours */
 .cd{display:inline-flex;align-items:baseline;gap:3px;font-family:var(--num);color:var(--text);line-height:1;white-space:nowrap}

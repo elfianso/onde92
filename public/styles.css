@@ -679,6 +679,6 @@ html[data-theme=dark] .onde-tiles.osm{filter:invert(1) hue-rotate(195deg) graysc
   .top-actions{gap:6px}
   .top-actions .icon-btn{width:36px;height:36px}
 }
-@media (max-width:380px){.live-pill .live-label{display:none}}
+@media (max-width:480px){.topbar{gap:8px}.legacy-back{margin-right:4px!important;white-space:nowrap}.brand-text em{display:none}.live-pill .live-label{display:none}.live-pill{padding:0 9px}}
 .nb-dp{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px}
 .nb-dp .vpill{max-width:none}
