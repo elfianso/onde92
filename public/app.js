@@ -53,8 +53,8 @@ async function viewHome() {
   <div class="section-h"><h2>Arrêts favoris</h2></div>
   <div id="favs"></div>
   <div class="info-strip">
-    <div class="card"><span class="tag rt"><i class="dot-live"></i>Temps réel</span><h4>Prochains passages IDFM</h4><p>Quand une clé PRIM est configurée, les heures d'arrivée estimées par le système d'aide à l'exploitation recalent chaque bus.</p></div>
-    <div class="card"><span class="tag th">Théorique</span><h4>Horaires prévus GTFS</h4><p>Sans flux temps réel, la position est calculée à partir des horaires officiels publiés par Île-de-France Mobilités.</p></div>
+    <div class="card"><span class="tag rt"><i class="dot-live"></i>Temps réel</span><h4>Prochains passages IDFM</h4><p>Quand le réseau transmet ses données en direct, les heures d'arrivée annoncées par Île-de-France Mobilités recalent chaque bus.</p></div>
+    <div class="card"><span class="tag th">Théorique</span><h4>Horaires prévus GTFS</h4><p>Sinon, la position de chaque bus est estimée d'après les horaires officiels d'Île-de-France Mobilités.</p></div>
     <div class="card"><span class="tag" style="background:var(--chip)">Précision</span><h4>À la seconde, arrêt par arrêt</h4><p>Chaque course est suivie entre deux arrêts consécutifs le long du tracé réel de la ligne.</p></div>
   </div>`;
   animateWave($('.hero-wave'));

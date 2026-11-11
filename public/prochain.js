@@ -952,8 +952,9 @@ async function boot() {
   if (window.maplibregl) initMap();
   try { await loadIndex(); await ensureArea(U.origin); }
   catch (e) { panel.innerHTML = '<div class="empty"><b>Les horaires n\'ont pas pu se charger</b><p>Ta connexion semble coupée. Réessaie dans un instant.</p><button type="button" class="btn" data-act="reload">Réessayer</button></div>'; return; }
+  const w = N.index.networks.map(n => (n.window || [])[1]).filter(Boolean).sort()[0] || '';
   const g = N.index.networks.map(n => n.generated).sort()[0] || '';
-  $('#footData').textContent = N.index.networks.map(n => n.name).join(' · ') + (g ? ' — horaires du ' + g.slice(0, 10).split('-').reverse().join('/') : '');
+  $('#footData').textContent = N.index.networks.map(n => n.name).join(' · ') + (w ? ' — horaires jusqu\'au ' + w.slice(6, 8) + '/' + w.slice(4, 6) + '/' + w.slice(0, 4) : (g ? ' — horaires du ' + g.slice(0, 10).split('-').reverse().join('/') : ''));
   U.dataReady = true;
   fetch('/api/status').then(r => r.json()).then(s => { S.status = s; }).catch(() => { });
   if (U.origin) setOrigin(U.origin, false); else render();
@@ -961,6 +962,14 @@ async function boot() {
   addOverlays();
   if (at) { reverseLabel(U.origin); setTimeout(() => flyTo(U.origin, { duration: 0 }), 200); }
   if (to) { const q = decodeURIComponent(to[1]); qIn.value = q; let n = 0; const go = () => U.origin && (U.near.length || n > 12) ? qSearch.run(q).then(hs => hs[0] && qSearch.pick(hs[0])) : (n++, setTimeout(go, 600)); go(); }
+  // Lien #at=… / #?to=… ouvert alors que l'appli est déjà affichée : on suit le lien au lieu de l'ignorer.
+  window.addEventListener('hashchange', () => {
+    const h2 = location.hash; if (!h2) return;
+    const at2 = /at=(-?[\d.]+),(-?[\d.]+)/.exec(h2), to2 = /[?&]to=([^&]+)/.exec(h2);
+    history.replaceState(null, '', location.pathname);
+    if (at2) { const o = { lat: +at2[1], lon: +at2[2], label: 'Point choisi', src: 'pin' }; U.followGps = false; setOrigin(o, false); reverseLabel(o); flyTo(o); }
+    if (to2) { const q = decodeURIComponent(to2[1]); qIn.value = q; setTimeout(() => qSearch.run(q).then(hs => hs[0] && qSearch.pick(hs[0])), at2 ? 900 : 0); }
+  });
   setInterval(() => { if (!document.hidden) render(); }, 5000);
   setInterval(() => { if (U.dest && U.plan && !U.plan.loading) { reorder(); render(); syncMap(); } }, 60000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden && U.dataReady) { render(); schedulePoll(); } });
