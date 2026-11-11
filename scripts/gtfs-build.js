@@ -198,13 +198,15 @@ async function build(zipFile, OUT) {
       if (!tripsOut.length || plist.length < 2) throw new Error('ligne ' + short + ' incomplète');
     }
     meta.lines.sort((a, b) => a.short < b.short ? -1 : 1);
-    // écriture atomique : dossier temporaire puis renommage
+    // écriture atomique fichier par fichier : on ne remplace pas tout le dossier
+    // (public/data contient aussi n/, les horaires de tous les réseaux).
     const tmp = OUT + '.tmp-' + process.pid; fs.rmSync(tmp, { recursive: true, force: true }); fs.mkdirSync(tmp, { recursive: true });
+    const names = [...Object.keys(files), 'lines.json'];
     for (const [f, s] of Object.entries(files)) fs.writeFileSync(path.join(tmp, f), s);
     fs.writeFileSync(path.join(tmp, 'lines.json'), JSON.stringify(meta, null, 1));
-    const old = OUT + '.old-' + process.pid;
-    if (fs.existsSync(OUT)) fs.renameSync(OUT, old);
-    fs.renameSync(tmp, OUT); fs.rmSync(old, { recursive: true, force: true });
+    fs.mkdirSync(OUT, { recursive: true });
+    for (const f of names) fs.renameSync(path.join(tmp, f), path.join(OUT, f));
+    fs.rmSync(tmp, { recursive: true, force: true });
     return meta;
   } finally { fs.closeSync(zip.fd); }
 }
