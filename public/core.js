@@ -30,6 +30,31 @@ const DOW = ['dim.', 'lun.', 'mar.', 'mer.', 'jeu.', 'ven.', 'sam.'];
 const MONTHS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
 function ymdDate(ymd) { return new Date(Date.UTC(+ymd.slice(0, 4), +ymd.slice(4, 6) - 1, +ymd.slice(6, 8))); }
 function dayLabel(ymd) { const t = todayYmd(); if (ymd === t) return "Aujourd'hui"; if (ymd === addDays(t, 1)) return 'Demain'; const d = ymdDate(ymd); return DOW[d.getUTCDay()] + ' ' + d.getUTCDate(); }
+// Jour d'une heure par rapport à `now` : vide (même jour), « demain », ou « lun. 9 ». Jamais « demain » pour un autre jour.
+function relDayShort(t, now) {
+  const y = parisParts(t).ymd, n = parisParts(now).ymd;
+  if (y === n) return '';
+  if (y === addDays(n, 1)) return 'demain';
+  const d = ymdDate(y);
+  return DOW[d.getUTCDay()] + ' ' + d.getUTCDate();
+}
+// Marque devant une heure « puis » affichée en horloge, seulement si son jour diffère du départ mis en avant.
+function followDayMark(t, anchor, now) {
+  if (t - now < 60 * 60e3) return '';
+  const lab = relDayShort(t, now);
+  if (!lab) return '';
+  if (anchor == null) return lab;
+  return lab === relDayShort(anchor, now) ? '' : lab;
+}
+// Échec de chargement (tuile ou ligne) : on n'insiste pas en boucle ; « Réessayer » efface la mémoire.
+function failMemo() {
+  const until = new Map();
+  return {
+    block(key, now, wait = 20000) { until.set(key, now + wait); },
+    cooling(key, now) { return (until.get(key) || 0) > now; },
+    clear() { until.clear(); },
+  };
+}
 function dayLong(ymd) { const d = ymdDate(ymd); return ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'][d.getUTCDay()] + ' ' + d.getUTCDate() + ' ' + MONTHS[d.getUTCMonth()]; }
 function minsUntil(ms, now = Date.now()) { return Math.round((ms - now) / 60000); }
 function whenHTML(ms, now, rt) {
@@ -459,8 +484,21 @@ function nbStopHits(q) {
 }
 function nbSearch(input, box, onPick) {
   let tmr, seq = 0, hits = [], sel = -1;
+  if (box && !box.id) box.id = (input.id || 'cherche') + '-res';
+  input.setAttribute('role', 'combobox');
+  input.setAttribute('aria-autocomplete', 'list');
+  if (box.id) input.setAttribute('aria-controls', box.id);
+  const syncAria = () => {
+    const open = !!(box && box.innerHTML.trim());
+    input.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (sel >= 0 && hits[sel]) input.setAttribute('aria-activedescendant', box.id + '-opt-' + sel);
+    else input.removeAttribute('aria-activedescendant');
+    const cur = box.querySelector('.result.sel');
+    if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: 'nearest' });
+  };
   const render = () => {
-    box.innerHTML = hits.map((h, i) => `<button class="result ${i === sel ? 'sel' : ''}" data-i="${i}" role="option" type="button"><span class="nb-r-ic ${h.kind === 'stop' ? 'stop' : (h.type || '')}">${h.kind === 'stop' ? BUS_SVG : PIN_SVG}</span><span class="nb-r-t">${esc(h.label)}<small>${esc(nbPlaceCaption(h))}</small></span>${h.lines ? `<span class="rb">${h.lines.map(s => badge(S.meta[s], 'sm')).join('')}</span>` : ''}</button>`).join('');
+    box.innerHTML = hits.map((h, i) => `<button class="result ${i === sel ? 'sel' : ''}" id="${box.id}-opt-${i}" data-i="${i}" role="option" aria-selected="${i === sel}" type="button"><span class="nb-r-ic ${h.kind === 'stop' ? 'stop' : (h.type || '')}">${h.kind === 'stop' ? BUS_SVG : PIN_SVG}</span><span class="nb-r-t">${esc(h.label)}<small>${esc(nbPlaceCaption(h))}</small></span>${h.lines ? `<span class="rb">${h.lines.slice(0, 4).map(s => S.meta[s] ? badge(S.meta[s], 'sm') : '').join('')}${h.lines.length > 4 ? `<span class="more-n">+${h.lines.length - 4}</span>` : ''}</span>` : ''}</button>`).join('');
+    syncAria();
   };
   const run = async q => {
     const my = ++seq; const stops = nbStopHits(q); hits = stops; sel = -1; render();
@@ -473,18 +511,18 @@ function nbSearch(input, box, onPick) {
       const rank = a => (a.city && nq.includes(norm(a.city)) ? 0 : 2) + (pl.some(p => Math.abs(p.lat - a.lat) < .03 && haversine([p.lat, p.lon], [a.lat, a.lon]) < 2000) ? 0 : 1) + (o && haversine(o, [a.lat, a.lon]) < 4000 ? 0 : 0.5);
       const addr = (r.results || []).filter(a => !stops.some(s => haversine([s.lat, s.lon], [a.lat, a.lon]) < 60)).map((a, i) => ({ ...a, kind: a.kind || 'place', _r: rank(a) * 100 + i })).sort((a, b) => a._r - b._r);
       hits = [...stops.slice(0, addr.length ? 3 : 4), ...addr].slice(0, 8); render();
-      if (!hits.length) box.innerHTML = '<div class="result muted">Aucun lieu trouvé — essaie autrement.</div>';
-    } catch (e) { if (!hits.length) box.innerHTML = '<div class="result muted">Recherche indisponible — réessaie dans un instant.</div>'; }
+      if (!hits.length) { box.innerHTML = '<div class="result muted">Aucun lieu trouvé — essaie autrement.</div>'; syncAria(); }
+    } catch (e) { if (!hits.length) { box.innerHTML = '<div class="result muted">Recherche indisponible — réessaie dans un instant.</div>'; syncAria(); } }
     return hits;
   };
-  input.addEventListener('input', () => { clearTimeout(tmr); const q = input.value.trim(); if (!q) { hits = []; render(); return; } tmr = setTimeout(() => run(q), 280); });
+  input.addEventListener('input', () => { clearTimeout(tmr); const q = input.value.trim(); if (!q) { hits = []; sel = -1; render(); return; } tmr = setTimeout(() => run(q), 280); });
   input.addEventListener('keydown', e => {
     if (e.key === 'ArrowDown') { sel = Math.min(hits.length - 1, sel + 1); render(); e.preventDefault(); }
     else if (e.key === 'ArrowUp') { sel = Math.max(0, sel - 1); render(); e.preventDefault(); }
     else if (e.key === 'Enter') { e.preventDefault(); const h = hits[Math.max(0, sel)]; if (h) pick(h); else run(input.value.trim()).then(hs => hs[0] && pick(hs[0])); }
-    else if (e.key === 'Escape') { hits = []; render(); }
+    else if (e.key === 'Escape' && (hits.length || box.innerHTML.trim())) { hits = []; sel = -1; render(); e.stopPropagation(); }
   });
-  input.addEventListener('blur', () => setTimeout(() => { if (!box.contains(document.activeElement)) { box.innerHTML = ''; } }, 180));
+  input.addEventListener('blur', () => setTimeout(() => { if (!box.contains(document.activeElement)) { box.innerHTML = ''; sel = -1; syncAria(); } }, 180));
   box.addEventListener('mousedown', e => e.preventDefault());
   box.addEventListener('click', e => { const b = e.target.closest('[data-i]'); if (b) pick(hits[+b.dataset.i]); });
   const pick = h => { hits = []; render(); input.blur(); onPick({ label: h.label, lat: h.lat, lon: h.lon, kind: h.kind, city: h.city, group: h.group }); };
